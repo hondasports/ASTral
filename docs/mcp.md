@@ -251,6 +251,10 @@ path と範囲を指定して現在のコードを取得します。
 
 MCP から公開する場合でも、対象は現在許可された repository root 内へ限定します。
 
+## Phase 4 の実装契約
+
+`astral serve <repository>` は `rmcp` の stdio transport で read-only tools を公開します。`read_code` は最大120行・32,000 bytes、検索・relationship toolは最大100件に制限し、切り詰め時は `truncated: true` を返します。repository root 外のpath、編集、任意コマンド実行は拒否または非公開です。
+
 ## ツールの使い分け
 
 推奨探索フロー:
