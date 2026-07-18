@@ -139,6 +139,7 @@ TypeScript compiler 相当の型情報が必要になった場合のみ、Node.j
 
 - [ADR 0001: JavaScript / TypeScript 解析に OXC を採用する](adr/0001-use-oxc-for-javascript-typescript.md)
 - [ADR 0002: Phase 1 の SQLite 索引と再構築](adr/0002-phase1-sqlite-index.md)
+- [ADR 0011: CLI動作履歴の構造化ログとローテーション](adr/0011-cli-operation-logging-and-rotation.md)
 
 ## Node.js（AIエージェント用）
 
@@ -283,7 +284,7 @@ cargo run -- index .
 stdio MCP サーバーとして起動する想定:
 
 ```text
-cargo run -- serve --project-root .
+cargo run -- serve .
 ```
 
 MCP クライアントが子プロセスとして起動する運用では、ASTral を別ターミナルで常時起動する必要はありません。
@@ -319,7 +320,7 @@ cargo run -- evaluate .
 
 ## ログ
 
-実装後は `RUST_LOG` でログレベルを制御できる形を想定しています。
+`RUST_LOG` でstderrとログファイルのログレベルを制御できます。
 
 POSIX shell（macOS / Linux / Git Bash）:
 
@@ -345,7 +346,16 @@ cargo run -- index .
 表示内容には、対象ファイル数、現在の`current/total`、完了件数、diagnostics数、経過時間が含まれます。
 `astral watch` では差分更新の開始・完了、更新・stale・削除ファイル数、経過時間を表示します。
 
-ソースコード本文、秘密情報、認証情報を通常ログへ出力しないでください。OXC diagnostics を記録する場合も、必要以上にソース本文を含めないようにします。
+動作履歴はJSON Lines形式の`astral.log`へ保存されます。保存先は`ASTRAL_DATA_DIR`を設定した場合はそのディレクトリ、未設定の場合はOS標準のASTralユーザーデータディレクトリです。10 MiBでローテーションし、`astral.log.1`〜`astral.log.5`を保持します。
+
+```powershell
+$env:ASTRAL_DATA_DIR = ".astral-data"
+$env:RUST_LOG = "astral=info"
+cargo run -- index .
+Get-Content .astral-data/astral.log -Tail 20 | ConvertFrom-Json
+```
+
+ログにはcommand、repository、進捗件数、経過時間、diagnostics数などを記録します。ソースコード本文、snippet、検索クエリ、MCP payload、秘密情報、認証情報は記録しません。ログファイルを複数プロセスで同時に共有する運用は現時点で保証していません。
 
 ## トラブルシューティング
 
