@@ -23,8 +23,9 @@ pub struct OxcAnalyzer {
 
 impl OxcAnalyzer {
     pub fn new(root: impl Into<std::path::PathBuf>) -> Self {
+        let root = root.into();
         Self {
-            root: Some(root.into()),
+            root: Some(root.canonicalize().unwrap_or(root)),
         }
     }
 }
@@ -102,8 +103,11 @@ impl LanguageAnalyzer for OxcAnalyzer {
                     .map(|resolution| resolution.path().to_path_buf())
                     .and_then(|resolved| {
                         self.root.as_ref().and_then(|root| {
+                            let resolved = resolved.canonicalize().unwrap_or(resolved);
+                            let root = root.canonicalize().unwrap_or_else(|_| root.clone());
                             resolved
-                                .strip_prefix(root)
+                                .strip_prefix(&root)
+                                .or_else(|_| resolved.strip_prefix(root))
                                 .ok()
                                 .map(std::path::Path::to_path_buf)
                         })
