@@ -197,7 +197,7 @@ impl McpServer {
         let status =
             IndexStore::get_index_status(root.path()).map_err(|error| error.to_string())?;
         Ok(output(
-            json!({"repositoryRoot": root.path(), "indexed": status.indexed, "schemaVersion": status.schema_version, "files": status.file_count, "symbols": status.symbol_count, "diagnostics": status.diagnostic_count, "staleFiles": status.stale_count, "missingFiles": status.missing_count}),
+            json!({"repositoryRoot": root.path(), "indexed": status.indexed, "schemaVersion": status.schema_version, "files": status.file_count, "symbols": status.symbol_count, "diagnostics": status.diagnostic_count, "staleFiles": status.stale_count, "missingFiles": status.missing_count, "snapshotHead": status.snapshot_head, "snapshotBranch": status.snapshot_branch, "workingTreeDirty": status.working_tree_dirty, "dirtyFiles": status.dirty_file_count}),
         ))
     }
 

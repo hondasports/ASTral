@@ -1,6 +1,7 @@
 pub mod analyzer;
 pub mod config;
 pub mod error;
+pub mod git;
 pub mod incremental;
 pub mod index;
 pub mod logging;

@@ -50,6 +50,10 @@ watcher の取りこぼしを修復するため、検索前にも scanner の一
 
 Phase 3 では schema v3 の `symbol_edges` に `reference`、`call`、`import`、`export`、`test` を保存します。各 edge は source / target の file・symbol、未解決名、confidence、resolution method を持ちます。公開 export の hash が変わった場合だけ、resolved import の直接 importer を最大1-hop再解析します。
 
+## Phase 5 の Git整合性
+
+検索前にHEAD OIDをsnapshot metadataと比較します。HEADが変わった場合はcheckout、merge、rewriteを含む可能性があるためfull rebuildし、同一HEADのWorking Tree差分はPhase 2のincremental更新を使います。Gitが利用できない場合もcontent hashによる鮮度確認を継続します。
+
 ## 保存時更新
 
 ファイル watcher が変更を検知したら、短い debounce の後で変更ファイルだけ再解析します。
