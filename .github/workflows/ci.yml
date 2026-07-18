@@ -53,3 +53,4 @@ jobs:
         run: |
           cargo run -- --help
           cargo run -- status .
+          cargo run -- evaluate .

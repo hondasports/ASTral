@@ -1,0 +1,26 @@
+[
+  {
+    "id": "relationship-edge",
+    "query": "symbol_edges",
+    "expected_paths": ["evaluation/fixtures/relationship-edges.ts"],
+    "k": 5
+  },
+  {
+    "id": "incremental-stale",
+    "query": "stale file",
+    "expected_paths": ["evaluation/fixtures/incremental.ts"],
+    "k": 5
+  },
+  {
+    "id": "mcp-search",
+    "query": "read-only MCP",
+    "expected_paths": ["evaluation/fixtures/mcp.ts"],
+    "k": 5
+  },
+  {
+    "id": "git-snapshot",
+    "query": "HEAD snapshot",
+    "expected_paths": ["evaluation/fixtures/git.ts"],
+    "k": 5
+  }
+]

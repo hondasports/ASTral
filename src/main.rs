@@ -39,6 +39,8 @@ enum Commands {
     Watch(StatusArgs),
     /// Run the read-only MCP server over stdio.
     Serve(StatusArgs),
+    /// Evaluate search quality against a JSON dataset.
+    Evaluate(EvaluateArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -69,6 +71,14 @@ struct RelationshipArgs {
     repository_root: PathBuf,
     /// Symbol identifier, name, or qualified name.
     symbol: String,
+}
+
+#[derive(Debug, clap::Args)]
+struct EvaluateArgs {
+    /// A repository directory or a directory below its root.
+    repository_root: PathBuf,
+    /// Evaluation dataset JSON path.
+    dataset: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -115,6 +125,7 @@ async fn run() -> astral::Result<()> {
         }
         Commands::Watch(args) => watch(args),
         Commands::Serve(args) => serve(args).await,
+        Commands::Evaluate(args) => evaluate(args),
     }
 }
 
@@ -162,8 +173,14 @@ fn search_code(args: SearchArgs) -> astral::Result<()> {
     let root = RepositoryRoot::resolve(args.repository_root)?;
     for result in IndexStore::search_code(root.path(), &args.query)? {
         println!(
-            "{}:{}-{}\n{}",
-            result.relative_path, result.start_byte, result.end_byte, result.snippet
+            "{}:{}-{} score={:.3} matched_by={} reason={}\n{}",
+            result.relative_path,
+            result.start_byte,
+            result.end_byte,
+            result.score,
+            result.matched_by.join(","),
+            result.reason,
+            result.snippet
         );
     }
     Ok(())
@@ -229,4 +246,21 @@ async fn serve(args: StatusArgs) -> astral::Result<()> {
     astral::mcp::serve_stdio()
         .await
         .map_err(|message| astral::AstralError::Indexing { message })
+}
+
+fn evaluate(args: EvaluateArgs) -> astral::Result<()> {
+    let root = RepositoryRoot::resolve(args.repository_root)?;
+    let dataset = args
+        .dataset
+        .unwrap_or_else(|| astral::evaluation::default_dataset(root.path()));
+    let report = astral::evaluation::evaluate(root.path(), &dataset)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).map_err(|error| {
+            astral::AstralError::InvalidConfiguration {
+                message: error.to_string(),
+            }
+        })?
+    );
+    Ok(())
 }

@@ -3,7 +3,7 @@
 このドキュメントでは、ASTral をローカルで開発するための環境構築手順を説明します。
 
 > [!NOTE]
-> ASTral は初期開発段階です。現在は OXC による JS/TS 索引、SQLite/FTS5 検索、`astral index`、`astral watch`、`astral search-code`、`astral find-symbol`、`astral read-symbol`、`astral find-references`、`astral find-callers`、`astral find-callees`、`astral find-related-tests` を提供します。
+> ASTral は初期開発段階です。現在は OXC による JS/TS 索引、SQLite/FTS5 検索、`astral index`、`astral watch`、`astral evaluate`、`astral search-code`、`astral find-symbol`、`astral read-symbol`、`astral find-references`、`astral find-callers`、`astral find-callees`、`astral find-related-tests` を提供します。
 
 ## 必要なツール
 
@@ -249,9 +249,12 @@ cargo run -- search-code . "RepositoryRoot"
 cargo run -- find-symbol . "RepositoryRoot"
 cargo run -- read-symbol . "src/repository.rs:RepositoryRoot:..."
 cargo run -- status .
+cargo run -- evaluate .
 ```
 
 `index` は一時 SQLite を構築し、全ファイルの解析が成功した場合だけ active index と置き換えます。解析または読み込みに失敗した場合は直前の index を保持します。schema version、OXC analyzer version、include/exclude 設定を変えた場合は `index` を再実行してください。
+
+`evaluate` は `evaluation/search_quality.json` の期待pathを使って `precision@k`、`recall@k`、`MRR`を測定し、JSONで出力します。別のデータセットを使う場合は `cargo run -- evaluate <repository> <dataset.json>` を指定します。
 
 GitHub Actions の `CI` workflow は、push・Pull Request・手動実行に対して Ubuntu、Windows、macOS（Apple Silicon）の各runnerで上記4コマンドを実行し、最後に `astral --help` と `astral status .` のCLI smoke testを実行します。Cargo registry、Git依存、`target`はOS別にキャッシュされます。
 
@@ -298,6 +301,21 @@ MCP クライアントが子プロセスとして起動する運用では、ASTr
 ```
 
 macOS や Windows では、それぞれの標準的なユーザーデータディレクトリを使用します。実装では `directories` などの crate を使い、OS ごとの差を吸収します。
+
+保存先を一時領域へ切り替える場合は、各OSの環境変数として `ASTRAL_DATA_DIR` を設定します。CIやテストでユーザー領域を汚さずに実行する場合にも利用できます。
+
+POSIX shell:
+
+```sh
+ASTRAL_DATA_DIR=".astral-data" cargo run -- evaluate .
+```
+
+PowerShell:
+
+```powershell
+$env:ASTRAL_DATA_DIR = ".astral-data"
+cargo run -- evaluate .
+```
 
 ## ログ
 
