@@ -18,15 +18,22 @@
 
 ASTral の主要な JavaScript / TypeScript analyzer は Rust 製の OXC を利用します。SQLite のビルド設定や、将来追加する Tree-sitter grammar などにより、環境によっては C/C++ コンパイラ、リンカー、`pkg-config` が必要です。
 
-### 任意
+### AI エージェントを利用する場合に必須
 
 - Node.js 20 以降
-  - `npx skills` で AI エージェント用スキルを導入する場合
-  - 将来 TypeScript の精密型解析 sidecar を開発する場合
+- `npx`
+- `grill-me` Skill
+
+Node.js は OXC analyzer 自体には不要です。AI エージェント用 Skill をセットアップする場合だけ必要です。
+
+### 任意
+
 - SQLite CLI
   - ローカルのインデックス内容を手動確認する場合
+- Node.js または別バイナリ
+  - 将来 TypeScript の精密型解析 sidecar を開発する場合
 
-OXC ベースの初期 analyzer 自体に Node.js は必要ありません。SQLite サーバーを常時起動する必要もなく、ASTral はローカルの SQLite ファイルを直接開く設計です。
+SQLite サーバーを常時起動する必要はありません。ASTral はローカルの SQLite ファイルを直接開く設計です。
 
 ## OS ごとの準備
 
@@ -64,9 +71,7 @@ cd ASTral
 
 ## Rust toolchain
 
-Rust は `rustup` で管理します。
-
-未導入の場合は、公式手順に従って `rustup` をインストールしてください。
+Rust は `rustup` で管理します。未導入の場合は公式手順に従ってインストールしてください。
 
 - https://rustup.rs/
 
@@ -119,7 +124,7 @@ TypeScript compiler 相当の型情報が必要になった場合のみ、Node.j
 
 ## Node.js
 
-AI エージェント用スキルを導入する場合は Node.js 20 以降を用意します。
+AI エージェント用 Skill を導入する場合は Node.js 20 以降を用意します。
 
 ```bash
 node --version
@@ -128,13 +133,38 @@ npx --version
 
 Node.js のバージョン管理には Volta、mise、asdf、nvm など任意のツールを利用できます。プロジェクトにバージョン固定ファイルが追加された場合は、その指定を優先してください。
 
-## AI エージェント用スキル
+## AI エージェント用 Skill
 
-スキルの導入は ASTral 自体のビルドには必須ではありません。ただし、Codex、Claude Code、Cursor などを使って開発する場合は、Rust と MCP の実装方針をエージェントへ共有するために導入を推奨します。
+リポジトリ固有の開発 Skill は `.agents/skills/` に保持します。一方、汎用の壁打ち Skill は upstream を利用し、リポジトリへ複製しません。
 
-`skills` CLI は `npx` から直接実行できます。グローバルインストールは不要です。
+### `grill-me` のセットアップ
 
-### 推奨スキル
+ASTral の要件・設計・実装・検証・レビュー Skill は、重要な判断分岐を洗練させるために `grill-me` を利用します。AI エージェントを使って開発する場合は、最初に次を実行してください。
+
+```bash
+npx skills add https://github.com/mattpocock/skills \
+  --skill grill-me
+```
+
+CLI が対象エージェントを尋ねた場合は、実際に利用するエージェントを選択してください。ASTral は Codex 専用サブエージェント設定をリポジトリへ持ち込みません。
+
+対象を明示したい場合は `--agent` を利用できます。例:
+
+```bash
+npx skills add https://github.com/mattpocock/skills \
+  --skill grill-me \
+  --agent claude-code
+```
+
+```bash
+npx skills add https://github.com/mattpocock/skills \
+  --skill grill-me \
+  --agent cursor
+```
+
+利用するエージェントが Skill chaining に対応していない場合は、各 Skill が壁打ちを要求した時点でユーザーが `/grill-me` を起動し、終了結果を元の作業へ戻してください。
+
+### 追加の推奨 Skill
 
 Rust の設計・実装・レビュー向け:
 
@@ -150,55 +180,37 @@ npx skills add https://github.com/microsoft/skills \
   --skill mcp-builder
 ```
 
-CLI が対象エージェントを尋ねた場合は、実際に利用するエージェントを選択してください。対象を明示する場合は `--agent` を利用できます。
+これらは ASTral 自体のビルドには必須ではありません。
 
-Codex の例:
-
-```bash
-npx skills add https://github.com/leonardomso/rust-skills \
-  --skill rust-skills \
-  --agent codex
-
-npx skills add https://github.com/microsoft/skills \
-  --skill mcp-builder \
-  --agent codex
-```
-
-Claude Code の例:
-
-```bash
-npx skills add https://github.com/leonardomso/rust-skills \
-  --skill rust-skills \
-  --agent claude-code
-
-npx skills add https://github.com/microsoft/skills \
-  --skill mcp-builder \
-  --agent claude-code
-```
+### Telemetry
 
 匿名 telemetry を無効化する場合は、実行時に `DISABLE_TELEMETRY=1` を設定します。
 
 ```bash
-DISABLE_TELEMETRY=1 npx skills add https://github.com/microsoft/skills \
-  --skill mcp-builder
+DISABLE_TELEMETRY=1 npx skills add https://github.com/mattpocock/skills \
+  --skill grill-me
 ```
 
 > [!CAUTION]
-> Agent Skill はエージェントへ手順やルールを追加します。導入前に配布元と `SKILL.md` の内容を確認し、信頼できないスキルをプロジェクトへ追加しないでください。
+> Agent Skill はエージェントへ手順やルールを追加します。導入前に配布元と `SKILL.md` の内容を確認し、信頼できない Skill を追加しないでください。
 
 Skills CLI の使い方:
 
 - https://www.skills.sh/docs/cli
+
+`grill-me` の upstream:
+
+- https://github.com/mattpocock/skills/tree/main/skills/productivity/grill-me
 
 ## ビルドと検証
 
 Cargo workspace の実装後は、次を標準の検証コマンドとします。
 
 ```bash
-cargo build --all-targets --all-features
+cargo build --workspace --all-targets --all-features
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
 ```
 
 ローカル修正時は、まず対象 crate のテストを実行し、Pull Request 前に workspace 全体を確認してください。
@@ -271,9 +283,16 @@ rustup component add rustfmt clippy
 
 OXC の API は、workspace に固定されたバージョンの型定義と公式ドキュメントを正としてください。依存を更新する場合は、parser fixture と normalized model の差分を確認します。
 
-### スキルのインストール先が想定と違う
+### `grill-me` が利用できない
 
-対象エージェントを `--agent codex` や `--agent claude-code` で明示してください。既存の設定ファイルを上書きする可能性がある場合は、実行前に差分を確認してください。
+開発環境のリポジトリルートで、セットアップコマンドを再実行してください。
+
+```bash
+npx skills add https://github.com/mattpocock/skills \
+  --skill grill-me
+```
+
+インストール先が想定と違う場合は、利用中のエージェントを `--agent` で明示してください。
 
 ### インデックスの状態がおかしい
 
