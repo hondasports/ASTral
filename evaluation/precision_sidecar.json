@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "analyzer_baseline": "oxc",
+  "candidate": "typescript-language-service",
+  "cases": [
+    {
+      "id": "generic-instantiation",
+      "fixture": "typescript-precision.ts + typescript-precision-consumer.ts",
+      "expected_symbols": ["mapValues", "displayNames"],
+      "expected_edges": ["references"],
+      "gap": "concrete generic type instantiation across files",
+      "source_snippets": [
+        "export function mapValues<T, R>(items: readonly T[], mapper: (item: T) => R): R[] { return items.map(mapper); }",
+        "export function displayNames(users: readonly User[]): string[] { return mapValues(users, (user) => user.displayName); }"
+      ]
+    },
+    {
+      "id": "overload-resolution",
+      "fixture": "typescript-precision.ts + typescript-precision-consumer.ts",
+      "expected_symbols": ["parseValue", "normalizeIdentifier"],
+      "expected_edges": ["calls"],
+      "gap": "selected overload signature for a union input",
+      "source_snippets": [
+        "export function parseValue(value: string): number; export function parseValue(value: number): string;",
+        "const parsed = parseValue(value);"
+      ]
+    },
+    {
+      "id": "conditional-type",
+      "fixture": "typescript-precision.ts",
+      "expected_symbols": ["Present", "presentUser"],
+      "expected_edges": ["references"],
+      "gap": "conditional type branch resolution",
+      "source_snippets": [
+        "export type Present<T> = T extends null | undefined ? never : T;",
+        "export function presentUser(user: User | null): Present<User> | null { return user; }"
+      ]
+    },
+    {
+      "id": "project-wide-inference",
+      "fixture": "typescript-precision.ts + typescript-precision-consumer.ts",
+      "expected_symbols": ["User", "displayNames", "normalizeIdentifier"],
+      "expected_edges": ["imports", "references", "calls"],
+      "gap": "project-wide type and symbol facts across module boundaries",
+      "source_snippets": [
+        "export interface User { id: UserId; displayName: string; }",
+        "import { mapValues, parseValue, type User } from \"./typescript-precision\";"
+      ]
+    }
+  ],
+  "fallback_cases": ["sidecar-timeout", "sidecar-crash", "incomplete-input", "unsupported-project"],
+  "acceptance": {
+    "sidecar_failure_preserves_oxc": true,
+    "source_is_sent_only_to_local_sidecar": true,
+    "analyzer_metadata_is_preserved": true
+  }
+}

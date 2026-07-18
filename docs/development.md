@@ -324,15 +324,26 @@ cargo run -- evaluate .
 POSIX shell（macOS / Linux / Git Bash）:
 
 ```sh
-RUST_LOG=astral=debug cargo run -- serve --project-root .
+RUST_LOG=astral=debug cargo run -- serve .
 ```
 
 PowerShell:
 
 ```powershell
 $env:RUST_LOG = "astral=debug"
-cargo run -- serve --project-root .
+cargo run -- serve .
 ```
+
+`astral index` は `RUST_LOG=astral=info` を指定すると、進捗をstderrへ出力します。
+通常のCLI結果はstdoutへ残るため、パイプ処理と分離できます。
+
+```powershell
+$env:RUST_LOG = "astral=info"
+cargo run -- index .
+```
+
+表示内容には、対象ファイル数、現在の`current/total`、完了件数、diagnostics数、経過時間が含まれます。
+`astral watch` では差分更新の開始・完了、更新・stale・削除ファイル数、経過時間を表示します。
 
 ソースコード本文、秘密情報、認証情報を通常ログへ出力しないでください。OXC diagnostics を記録する場合も、必要以上にソース本文を含めないようにします。
 

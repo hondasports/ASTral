@@ -149,6 +149,9 @@ stdio 接続では、Codex や Claude Code などの MCP クライアントが A
 - [インデックスと更新戦略](docs/indexing.md)
 - [解析結果の保存方式](docs/storage.md)
 - [MCP ツール設計](docs/mcp.md)
+- [ADR 0008: Phase 7 semantic search provider 契約](docs/adr/0008-phase7-semantic-search.md)
+- [ADR 0009: Phase 8 TypeScript precision sidecar](docs/adr/0009-phase8-typescript-precision-sidecar.md)
+- [ADR 0010: Phase 9 self-hosted remote/team mode](docs/adr/0010-phase9-remote-team-mode.md)
 - [ロードマップ](docs/roadmap.md)
 - [コントリビューションガイド](CONTRIBUTING.md)
 

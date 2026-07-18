@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use directories::ProjectDirs;
@@ -123,6 +123,8 @@ impl IndexStore {
         }
         let temporary_path = temporary_path(database_path);
         let _ = fs::remove_file(&temporary_path);
+        let started_at = Instant::now();
+        tracing::info!(repository = %root.display(), "indexing started");
 
         let build_result = (|| {
             let mut connection = Connection::open(&temporary_path).map_err(database_error)?;
@@ -138,7 +140,25 @@ impl IndexStore {
         if build_result.is_err() {
             let _ = fs::remove_file(&temporary_path);
         }
-        build_result
+        match build_result {
+            Ok(status) => {
+                tracing::info!(
+                    files = status.file_count,
+                    symbols = status.symbol_count,
+                    diagnostics = status.diagnostic_count,
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    "indexing completed"
+                );
+                Ok(status)
+            }
+            Err(error) => {
+                tracing::error!(
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    "indexing failed"
+                );
+                Err(error)
+            }
+        }
     }
 
     pub fn rebuild(root: &Path) -> Result<IndexStatus> {
@@ -441,6 +461,8 @@ impl IndexStore {
 fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
     let scanner = SourceScanner::new(root);
     let files = scanner.scan()?;
+    let total_files = files.len();
+    tracing::info!(files = total_files, "indexing files discovered");
     let analyzer = OxcAnalyzer::new(root);
     let mut diagnostic_count = 0_i64;
 
@@ -465,7 +487,15 @@ fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
         )
         .map_err(database_error)?;
 
-    for file in files {
+    for (index, file) in files.into_iter().enumerate() {
+        let current = index + 1;
+        let relative_path = file.relative_path.to_string_lossy().replace('\\', "/");
+        tracing::info!(
+            current,
+            total = total_files,
+            path = %relative_path,
+            "indexing file"
+        );
         let analysis = analyzer.analyze(&file.relative_path, &file.source)?;
         diagnostic_count += analysis.diagnostics.len() as i64;
         let hash = hash_bytes(file.source.as_bytes());
@@ -483,8 +513,6 @@ fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
             )
             .map_err(database_error)?;
         let file_id = transaction.last_insert_rowid();
-        let relative_path = file.relative_path.to_string_lossy().replace('\\', "/");
-
         for (index, symbol) in analysis.symbols.iter().enumerate() {
             let symbol_id = format!(
                 "{relative_path}:{}:{}:{index}",

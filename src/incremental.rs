@@ -172,8 +172,18 @@ impl IncrementalIndexer {
             }
             let now = Instant::now();
             if batcher.ready(now) {
-                let _dirty_paths = batcher.take(now);
-                self.refresh()?;
+                let dirty_paths = batcher.take(now);
+                let started_at = Instant::now();
+                tracing::info!(paths = dirty_paths.len(), "index refresh started");
+                let report = self.refresh()?;
+                tracing::info!(
+                    updated_files = report.updated_files,
+                    stale_files = report.stale_files,
+                    removed_files = report.removed_files,
+                    rebuilt = report.rebuilt,
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    "index refresh completed"
+                );
             }
         }
     }

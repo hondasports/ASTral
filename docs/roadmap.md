@@ -164,6 +164,9 @@ astral status .
 
 ## Phase 7: Semantic search
 
+要件・provider境界は[ADR 0008](adr/0008-phase7-semantic-search.md)で確定した。具体的なmodel/runtimeの実装は、
+`evaluation/semantic_search_baseline.json`の受け入れ条件を満たす後続Issueで行う。
+
 目的: 語彙が一致しない要求から関連実装を見つける。
 
 - chunk summaries
@@ -183,6 +186,9 @@ astral status .
 - model identifier の変更時に安全に再生成できる
 
 ## Phase 8: Language-specific precision and expansion
+
+TypeScript precision sidecarの第一候補とfallback契約は[ADR 0009](adr/0009-phase8-typescript-precision-sidecar.md)で確定した。
+OXC不足fixtureは`evaluation/precision_sidecar.json`で管理する。
 
 目的: OXC の範囲を超える型解析を補い、他言語を追加する。
 
@@ -212,6 +218,9 @@ TypeScript 型解析候補:
 - analyzerごとの精度差をmetadataで説明できる
 
 ## Phase 9: Remote and team mode
+
+self-hosted、OIDC/JWT、repository単位SQLiteの境界は[ADR 0010](adr/0010-phase9-remote-team-mode.md)で確定した。
+remote transportの実装・credential発行・本番公開は後続Issueの対象とする。
 
 目的: 複数人・複数リポジトリで共有する。
 
