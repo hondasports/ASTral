@@ -32,4 +32,10 @@ pub enum AstralError {
 
     #[error("failed to initialize logging: {message}")]
     Logging { message: String },
+
+    #[error("database operation failed: {message}")]
+    Database { message: String },
+
+    #[error("indexing failed: {message}")]
+    Indexing { message: String },
 }

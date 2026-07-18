@@ -1,8 +1,11 @@
 pub mod analyzer;
 pub mod config;
 pub mod error;
+pub mod index;
 pub mod logging;
+pub mod oxc_analyzer;
 pub mod repository;
+pub mod scanner;
 
 pub use analyzer::{
     AnalysisResult, AnalyzerMetadata, Call, Diagnostic, DiagnosticSeverity, Export, Import,

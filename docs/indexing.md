@@ -34,6 +34,10 @@ mark snapshot active
 
 途中で失敗した場合、不完全な snapshot を検索へ公開しません。
 
+Phase 1 の実装では、上記の初回処理を `astral index <repository>` が実行する。scanner は `.gitignore` を尊重し、`.git`、`node_modules`、`target`、生成物、`.env*` を除外する。対象は `.js`、`.jsx`、`.mjs`、`.cjs`、`.ts`、`.tsx`、`.mts`、`.cts` である。
+
+active SQLite は OS の user data directory に置き、rebuild は一時 DB と FTS5 を作成してから atomic に置き換える。Phase 1 の schema version は `1` で、schema・OXC version・除外設定の変更時は full rebuild を行う。watcher と incremental update は後続フェーズの責務とする。
+
 ## 保存時更新
 
 ファイル watcher が変更を検知したら、短い debounce の後で変更ファイルだけ再解析します。
