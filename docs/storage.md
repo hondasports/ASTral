@@ -6,9 +6,11 @@
 
 全文検索やベクトル検索は、SQLite の正規化データから再構築できる派生インデックスとして扱います。
 
-Phase 1 では `rusqlite` の `bundled-full` を利用するため、SQLite の native library を別途インストールしなくても Windows・macOS・Linux で同じ手順を実行できます。schema version は `1` とし、schema・OXC analyzer version・除外設定が変わった場合は migration ではなく full rebuild を実行します。
+Phase 1 では `rusqlite` の `bundled-full` を利用するため、SQLite の native library を別途インストールしなくても Windows・macOS・Linux で同じ手順を実行できます。Phase 2 の schema version は `2` とし、schema・OXC analyzer version・除外設定が変わった場合は migration ではなく full rebuild を実行します。
 
 rebuild は一時 DB と FTS5 を作成し、transaction の commit 後に active DB と置き換えます。解析またはファイル読み込みが失敗した場合、一時 DB だけを破棄し、直前の active DB は保持します。
+
+差分更新では `file_states` が file 単位の鮮度を表します。`stale` は直前の正常な正規化データを保持したまま検索対象から除外する状態、`missing` は Working Tree から削除された状態です。
 
 ```text
 source repository
