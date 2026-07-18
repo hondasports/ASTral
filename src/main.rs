@@ -1,4 +1,7 @@
-use std::{path::PathBuf, process::ExitCode};
+use std::{
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use astral::{
     config::Config,
@@ -111,7 +114,14 @@ async fn run() -> astral::Result<()> {
 
     logging::init(&config)?;
 
-    match command {
+    let command_name = command_name(&command);
+    let repository = command_repository(&command).display().to_string();
+    tracing::info!(
+        command = command_name,
+        repository = %repository,
+        "command started"
+    );
+    let result = match command {
         Commands::Status(args) => status(args),
         Commands::Index(args) => index(args),
         Commands::SearchCode(args) => search_code(args),
@@ -126,6 +136,67 @@ async fn run() -> astral::Result<()> {
         Commands::Watch(args) => watch(args),
         Commands::Serve(args) => serve(args).await,
         Commands::Evaluate(args) => evaluate(args),
+    };
+    match &result {
+        Ok(()) => tracing::info!(
+            command = command_name,
+            repository = %repository,
+            "command completed"
+        ),
+        Err(error) => tracing::error!(
+            command = command_name,
+            repository = %repository,
+            error_kind = error_kind(error),
+            "command failed"
+        ),
+    }
+    result
+}
+
+fn command_name(command: &Commands) -> &'static str {
+    match command {
+        Commands::Status(_) => "status",
+        Commands::Index(_) => "index",
+        Commands::SearchCode(_) => "search-code",
+        Commands::FindSymbol(_) => "find-symbol",
+        Commands::ReadSymbol(_) => "read-symbol",
+        Commands::FindReferences(_) => "find-references",
+        Commands::FindCallers(_) => "find-callers",
+        Commands::FindCallees(_) => "find-callees",
+        Commands::FindRelatedTests(_) => "find-related-tests",
+        Commands::Watch(_) => "watch",
+        Commands::Serve(_) => "serve",
+        Commands::Evaluate(_) => "evaluate",
+    }
+}
+
+fn command_repository(command: &Commands) -> &Path {
+    match command {
+        Commands::Status(args)
+        | Commands::Index(args)
+        | Commands::Watch(args)
+        | Commands::Serve(args) => &args.repository_root,
+        Commands::SearchCode(args) | Commands::FindSymbol(args) => &args.repository_root,
+        Commands::ReadSymbol(args) => &args.repository_root,
+        Commands::FindReferences(args)
+        | Commands::FindCallers(args)
+        | Commands::FindCallees(args)
+        | Commands::FindRelatedTests(args) => &args.repository_root,
+        Commands::Evaluate(args) => &args.repository_root,
+    }
+}
+
+fn error_kind(error: &astral::AstralError) -> &'static str {
+    match error {
+        astral::AstralError::PathNotFound { .. } => "path_not_found",
+        astral::AstralError::NotDirectory { .. } => "not_directory",
+        astral::AstralError::RepositoryRootNotFound { .. } => "repository_root_not_found",
+        astral::AstralError::PathAccess { .. } => "path_access",
+        astral::AstralError::Canonicalize { .. } => "canonicalize",
+        astral::AstralError::InvalidConfiguration { .. } => "invalid_configuration",
+        astral::AstralError::Logging { .. } => "logging",
+        astral::AstralError::Database { .. } => "database",
+        astral::AstralError::Indexing { .. } => "indexing",
     }
 }
 
