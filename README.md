@@ -70,6 +70,19 @@ Indexer
 - `git2` または Git CLI
 - TypeScript の精密解析用 sidecar（必要になった場合）
 
+## 開発を始める
+
+必要な Rust toolchain、OS ごとのネイティブビルドツール、任意の AI エージェント用スキルについては、[開発環境の構築](docs/development.md)を参照してください。
+
+```bash
+git clone https://github.com/hondasports/ASTral.git
+cd ASTral
+rustup toolchain install stable --component rustfmt clippy
+rustup override set stable
+```
+
+AI コーディングエージェントを利用する場合は、`npx skills` による Rust・MCP 開発スキルの導入手順も用意しています。スキルは ASTral 自体のビルドには必須ではありません。
+
 ## 更新戦略
 
 ASTral は次の三段構えでインデックスの鮮度を保ちます。
@@ -103,11 +116,13 @@ stdio 接続では、Codex や Claude Code などの MCP クライアントが A
 
 ## ドキュメント
 
+- [開発環境の構築](docs/development.md)
 - [アーキテクチャ](docs/architecture.md)
 - [インデックスと更新戦略](docs/indexing.md)
 - [解析結果の保存方式](docs/storage.md)
 - [MCP ツール設計](docs/mcp.md)
 - [ロードマップ](docs/roadmap.md)
+- [コントリビューションガイド](CONTRIBUTING.md)
 
 ## スコープ外
 
@@ -122,4 +137,4 @@ stdio 接続では、Codex や Claude Code などの MCP クライアントが A
 
 ## ライセンス
 
-未定です。利用・配布を始める前にライセンスを追加します。
+[MIT License](LICENSE)
