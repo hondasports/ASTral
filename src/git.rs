@@ -71,7 +71,7 @@ fn git_bytes(root: &Path, args: &[&str]) -> Result<Option<Vec<u8>>> {
     };
     if output.status.success() {
         Ok(Some(output.stdout))
-    } else if args.first() == Some(&"rev-parse") {
+    } else if matches!(args.first(), Some(&"rev-parse") | Some(&"symbolic-ref")) {
         Ok(None)
     } else {
         Err(AstralError::Indexing {
