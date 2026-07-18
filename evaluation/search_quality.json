@@ -22,5 +22,11 @@
     "query": "HEAD snapshot",
     "expected_paths": ["evaluation/fixtures/git.ts"],
     "k": 5
+  },
+  {
+    "id": "semantic-gap-downstream-impact",
+    "query": "show downstream impact",
+    "expected_paths": ["evaluation/fixtures/relationship-edges.ts"],
+    "k": 5
   }
 ]
