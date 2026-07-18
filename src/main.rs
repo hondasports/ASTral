@@ -37,6 +37,8 @@ enum Commands {
     FindRelatedTests(RelationshipArgs),
     /// Watch the Working Tree and incrementally update the index.
     Watch(StatusArgs),
+    /// Run the read-only MCP server over stdio.
+    Serve(StatusArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -69,8 +71,9 @@ struct RelationshipArgs {
     symbol: String,
 }
 
-fn main() -> ExitCode {
-    match run() {
+#[tokio::main]
+async fn main() -> ExitCode {
+    match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
@@ -79,7 +82,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> astral::Result<()> {
+async fn run() -> astral::Result<()> {
     let config = Config::from_env()?;
     let cli = Cli::parse();
 
@@ -111,6 +114,7 @@ fn run() -> astral::Result<()> {
             find_relationships(args, IndexStore::find_related_tests)
         }
         Commands::Watch(args) => watch(args),
+        Commands::Serve(args) => serve(args).await,
     }
 }
 
@@ -203,4 +207,15 @@ fn watch(args: StatusArgs) -> astral::Result<()> {
     let database = IndexStore::default_path(root.path());
     println!("Watching repository: {}", root.path().display());
     IncrementalIndexer::new(root.path(), database).watch()
+}
+
+async fn serve(args: StatusArgs) -> astral::Result<()> {
+    let root = RepositoryRoot::resolve(args.repository_root)?;
+    std::env::set_current_dir(root.path()).map_err(|source| astral::AstralError::PathAccess {
+        path: root.path().to_path_buf(),
+        source,
+    })?;
+    astral::mcp::serve_stdio()
+        .await
+        .map_err(|message| astral::AstralError::Indexing { message })
 }

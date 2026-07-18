@@ -4,6 +4,7 @@ pub mod error;
 pub mod incremental;
 pub mod index;
 pub mod logging;
+pub mod mcp;
 pub mod oxc_analyzer;
 pub mod repository;
 pub mod scanner;
