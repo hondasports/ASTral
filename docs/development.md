@@ -238,7 +238,7 @@ cargo test --workspace --all-features
 
 ローカル修正時は、まず対象 crate のテストを実行し、Pull Request 前に workspace 全体を確認してください。
 
-GitHub Actions の `CI` workflow は、push・Pull Request・手動実行に対して Ubuntu、Windows、macOS（Apple Silicon）の各runnerで上記4コマンドを実行し、最後に `astral --help` と `astral status .` のCLI smoke testを実行します。
+GitHub Actions の `CI` workflow は、push・Pull Request・手動実行に対して Ubuntu、Windows、macOS（Apple Silicon）の各runnerで上記4コマンドを実行し、最後に `astral --help` と `astral status .` のCLI smoke testを実行します。Cargo registry、Git依存、`target`はOS別にキャッシュされます。
 
 OXC analyzer を変更した場合は、少なくとも次の fixture を確認します。
 
