@@ -74,6 +74,7 @@ pub struct Import {
     pub source: String,
     pub imported_name: Option<String>,
     pub local_name: Option<String>,
+    pub resolved_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

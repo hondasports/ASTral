@@ -3,7 +3,7 @@
 このドキュメントでは、ASTral をローカルで開発するための環境構築手順を説明します。
 
 > [!NOTE]
-> ASTral は初期開発段階です。Phase 0ではCargo workspace、`astral --help`、`astral status`を提供します。インデックス作成やMCPサーバーは後続フェーズで追加します。
+> ASTral は初期開発段階です。現在は OXC による JS/TS 索引、SQLite/FTS5 検索、`astral index`、`astral search-code`、`astral find-symbol`、`astral read-symbol` を提供します。MCPサーバーと watcher は後続フェーズで追加します。
 
 ## 必要なツール
 
@@ -127,7 +127,7 @@ oxc_span = "..."
 oxc_resolver = "..."
 ```
 
-実装時は workspace の `Cargo.toml` と `Cargo.lock` に記録されたバージョンを正としてください。ドキュメント内の `...` をそのまま利用しないでください。
+現在の実装で使用する OXC crate は `0.140.0`、`oxc_resolver` は `11.24.2`、SQLite は `rusqlite 0.40.1` の `bundled-full` です。workspace の `Cargo.toml` と `Cargo.lock` を正とし、バージョン更新時は index の再構築が必要です。
 
 OXC の AST 型は analyzer crate 内でのみ扱い、store、search、MCP crate へ直接公開しません。共通の `AnalysisResult` へ変換してから後段へ渡します。
 
@@ -138,6 +138,7 @@ TypeScript compiler 相当の型情報が必要になった場合のみ、Node.j
 関連する設計判断:
 
 - [ADR 0001: JavaScript / TypeScript 解析に OXC を採用する](adr/0001-use-oxc-for-javascript-typescript.md)
+- [ADR 0002: Phase 1 の SQLite 索引と再構築](adr/0002-phase1-sqlite-index.md)
 
 ## Node.js（AIエージェント用）
 
@@ -237,6 +238,20 @@ cargo test --workspace --all-features
 ```
 
 ローカル修正時は、まず対象 crate のテストを実行し、Pull Request 前に workspace 全体を確認してください。
+
+## 索引の作成と検索
+
+リポジトリ内の生成物を増やさないよう、SQLite index は OS のユーザーデータ領域へ保存します。リポジトリのパスから project id を生成するため、Windows・macOS・Linux で同じ CLI を利用できます。
+
+```bash
+cargo run -- index .
+cargo run -- search-code . "RepositoryRoot"
+cargo run -- find-symbol . "RepositoryRoot"
+cargo run -- read-symbol . "src/repository.rs:RepositoryRoot:..."
+cargo run -- status .
+```
+
+`index` は一時 SQLite を構築し、全ファイルの解析が成功した場合だけ active index と置き換えます。解析または読み込みに失敗した場合は直前の index を保持します。schema version、OXC analyzer version、include/exclude 設定を変えた場合は `index` を再実行してください。
 
 GitHub Actions の `CI` workflow は、push・Pull Request・手動実行に対して Ubuntu、Windows、macOS（Apple Silicon）の各runnerで上記4コマンドを実行し、最後に `astral --help` と `astral status .` のCLI smoke testを実行します。Cargo registry、Git依存、`target`はOS別にキャッシュされます。
 

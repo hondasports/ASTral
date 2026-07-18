@@ -12,6 +12,17 @@ resolver = "2"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+directories = "6.0"
+ignore = "0.4"
+oxc_allocator = "0.140.0"
+oxc_ast = "0.140.0"
+oxc_ast_visit = "0.140.0"
+oxc_parser = "0.140.0"
+oxc_semantic = "0.140.0"
+oxc_span = "0.140.0"
+oxc_resolver = "11.24.2"
+rusqlite = { version = "0.40.1", features = ["bundled-full"] }
+sha2 = "0.10"
 thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
