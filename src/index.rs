@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -15,7 +16,7 @@ use crate::{
     scanner::SourceScanner,
 };
 
-pub(crate) const SCHEMA_VERSION: i64 = 2;
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileStateStatus {
@@ -70,6 +71,20 @@ pub struct ReadSymbolResult {
     pub kind: String,
     pub relative_path: String,
     pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelationshipResult {
+    pub edge_type: String,
+    pub confidence: f64,
+    pub resolution_method: String,
+    pub source_file: String,
+    pub source_symbol_id: Option<String>,
+    pub source_name: Option<String>,
+    pub target_file: Option<String>,
+    pub target_symbol_id: Option<String>,
+    pub target_name: Option<String>,
+    pub target_external_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -137,6 +152,26 @@ impl IndexStore {
     pub fn read_symbol(root: &Path, symbol_id: &str) -> Result<ReadSymbolResult> {
         crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
         Self::read_symbol_at(&Self::default_path(root), symbol_id)
+    }
+
+    pub fn find_references(root: &Path, query: &str) -> Result<Vec<RelationshipResult>> {
+        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
+        Self::find_relationships_at(&Self::default_path(root), query, "reference", false)
+    }
+
+    pub fn find_callers(root: &Path, query: &str) -> Result<Vec<RelationshipResult>> {
+        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
+        Self::find_relationships_at(&Self::default_path(root), query, "call", false)
+    }
+
+    pub fn find_callees(root: &Path, query: &str) -> Result<Vec<RelationshipResult>> {
+        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
+        Self::find_relationships_at(&Self::default_path(root), query, "call", true)
+    }
+
+    pub fn find_related_tests(root: &Path, query: &str) -> Result<Vec<RelationshipResult>> {
+        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
+        Self::find_relationships_at(&Self::default_path(root), query, "test", false)
     }
 
     pub fn status_at(database_path: &Path) -> Result<IndexStatus> {
@@ -293,6 +328,54 @@ impl IndexStore {
                 message: format!("symbol not found: {symbol_id}"),
             })
     }
+
+    pub fn find_relationships_at(
+        database_path: &Path,
+        query: &str,
+        edge_type: &str,
+        source_matches: bool,
+    ) -> Result<Vec<RelationshipResult>> {
+        let connection = Connection::open(database_path).map_err(database_error)?;
+        let condition = if source_matches {
+            "(e.source_symbol_id = ?2 OR ss.name = ?2 OR ss.qualified_name = ?2)"
+        } else {
+            "(e.target_symbol_id = ?2 OR ts.name = ?2 OR ts.qualified_name = ?2 OR e.target_external_name = ?2)"
+        };
+        let sql = format!(
+            "SELECT e.edge_type, e.confidence, e.resolution_method,
+                    sf.relative_path, e.source_symbol_id, ss.name,
+                    tf.relative_path, e.target_symbol_id, ts.name, e.target_external_name
+             FROM symbol_edges e
+             JOIN files sf ON sf.id = e.source_file_id
+             LEFT JOIN symbols ss ON ss.symbol_id = e.source_symbol_id
+             LEFT JOIN files tf ON tf.id = e.target_file_id
+             LEFT JOIN symbols ts ON ts.symbol_id = e.target_symbol_id
+             JOIN file_states sfs ON sfs.relative_path = sf.relative_path AND sfs.status = 'fresh'
+             LEFT JOIN file_states tfs ON tfs.relative_path = tf.relative_path
+             WHERE e.edge_type = ?1 AND {condition}
+               AND (tfs.status IS NULL OR tfs.status = 'fresh')
+             ORDER BY sf.relative_path, ss.name, tf.relative_path, ts.name"
+        );
+        let mut statement = connection.prepare(&sql).map_err(database_error)?;
+        let rows = statement
+            .query_map(rusqlite::params![edge_type, query], |row| {
+                Ok(RelationshipResult {
+                    edge_type: row.get(0)?,
+                    confidence: row.get(1)?,
+                    resolution_method: row.get(2)?,
+                    source_file: row.get(3)?,
+                    source_symbol_id: row.get(4)?,
+                    source_name: row.get(5)?,
+                    target_file: row.get(6)?,
+                    target_symbol_id: row.get(7)?,
+                    target_name: row.get(8)?,
+                    target_external_name: row.get(9)?,
+                })
+            })
+            .map_err(database_error)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(database_error)
+    }
 }
 
 fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
@@ -314,11 +397,12 @@ fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
         let hash = hash_bytes(file.source.as_bytes());
         transaction
             .execute(
-                "INSERT INTO files(relative_path, language, content_hash, source, size_bytes) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO files(relative_path, language, content_hash, public_api_hash, source, size_bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     file.relative_path.to_string_lossy().replace('\\', "/"),
                     file.language,
                     hash,
+                    public_api_hash(&analysis),
                     &file.source,
                     file.source.len() as i64,
                 ],
@@ -427,8 +511,9 @@ fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
                     "INSERT INTO chunk_search(rowid, relative_path, start_byte, end_byte, content) VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![chunk_id, relative_path, start as i64, end as i64, content],
                 )
-                .map_err(database_error)?;
+        .map_err(database_error)?;
         }
+        rebuild_edges(transaction)?;
         transaction
             .execute(
                 "INSERT INTO file_states(relative_path, status, observed_hash, error, updated_at) VALUES (?1, 'fresh', ?2, NULL, ?3)",
@@ -445,12 +530,434 @@ fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct EdgeFile {
+    id: i64,
+    path: String,
+}
+
+#[derive(Debug, Clone)]
+struct EdgeSymbol {
+    id: String,
+    file_id: i64,
+    name: String,
+    start: i64,
+    end: i64,
+}
+
+#[derive(Debug, Clone)]
+struct ImportLink {
+    target_file_id: Option<i64>,
+    imported_name: Option<String>,
+}
+
+type ImportRecord = (i64, Option<String>, Option<String>, Option<String>);
+
+pub(crate) fn public_api_hash(analysis: &crate::analyzer::AnalysisResult) -> String {
+    let mut exports: Vec<_> = analysis
+        .exports
+        .iter()
+        .map(|export| {
+            format!(
+                "{}:{}",
+                export.exported_name,
+                export.local_name.as_deref().unwrap_or_default()
+            )
+        })
+        .collect();
+    exports.sort();
+    hash_bytes(exports.join("\n").as_bytes())
+}
+
+pub(crate) fn rebuild_edges(transaction: &Transaction<'_>) -> Result<()> {
+    transaction
+        .execute("DELETE FROM symbol_edges", [])
+        .map_err(database_error)?;
+
+    let files: Vec<EdgeFile> = {
+        let mut statement = transaction
+            .prepare("SELECT id, relative_path FROM files")
+            .map_err(database_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(EdgeFile {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                })
+            })
+            .map_err(database_error)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(database_error)?
+    };
+    let files_by_path: HashMap<String, EdgeFile> = files
+        .iter()
+        .cloned()
+        .map(|file| (file.path.clone(), file))
+        .collect();
+    let symbols: Vec<EdgeSymbol> = {
+        let mut statement = transaction
+            .prepare("SELECT symbol_id, file_id, name, start_byte, end_byte FROM symbols")
+            .map_err(database_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(EdgeSymbol {
+                    id: row.get(0)?,
+                    file_id: row.get(1)?,
+                    name: row.get(2)?,
+                    start: row.get(3)?,
+                    end: row.get(4)?,
+                })
+            })
+            .map_err(database_error)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(database_error)?
+    };
+    let symbols_by_file_name: HashMap<(i64, String), Vec<EdgeSymbol>> = symbols
+        .iter()
+        .cloned()
+        .fold(HashMap::new(), |mut map, symbol| {
+            map.entry((symbol.file_id, symbol.name.clone()))
+                .or_default()
+                .push(symbol);
+            map
+        });
+    let mut imports_by_file: HashMap<(i64, String), ImportLink> = HashMap::new();
+    {
+        let mut statement = transaction
+            .prepare("SELECT file_id, local_name, imported_name, resolved_path FROM imports")
+            .map_err(database_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .map_err(database_error)?;
+        for row in rows {
+            let (file_id, local_name, imported_name, resolved_path) =
+                row.map_err(database_error)?;
+            if let Some(local_name) = local_name {
+                imports_by_file.insert(
+                    (file_id, local_name),
+                    ImportLink {
+                        target_file_id: resolved_path
+                            .map(|path| path.replace('\\', "/"))
+                            .and_then(|path| files_by_path.get(&path).map(|file| file.id)),
+                        imported_name,
+                    },
+                );
+            }
+        }
+    }
+
+    let references: Vec<(i64, String, Option<String>, i64, i64)> = {
+        let mut statement = transaction
+            .prepare("SELECT file_id, name, target, start_byte, end_byte FROM references_index")
+            .map_err(database_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .map_err(database_error)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(database_error)?
+    };
+    for (file_id, name, target, start, end) in references {
+        let source = enclosing_symbol(&symbols, file_id, start, end);
+        let target_name = target.as_deref().unwrap_or(&name);
+        let resolved = resolve_target(
+            &symbols_by_file_name,
+            &imports_by_file,
+            file_id,
+            target_name,
+        );
+        insert_edge(
+            transaction,
+            file_id,
+            source.map(|symbol| symbol.id.as_str()),
+            resolved.0,
+            resolved.1.as_deref(),
+            resolved.2,
+            "reference",
+            resolved.3,
+            resolved.4,
+        )?;
+    }
+
+    let calls: Vec<(i64, String, i64, i64)> = {
+        let mut statement = transaction
+            .prepare("SELECT file_id, callee, start_byte, end_byte FROM calls")
+            .map_err(database_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .map_err(database_error)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(database_error)?
+    };
+    for (file_id, callee, start, end) in calls {
+        let source = enclosing_symbol(&symbols, file_id, start, end);
+        let resolved = resolve_target(&symbols_by_file_name, &imports_by_file, file_id, &callee);
+        insert_edge(
+            transaction,
+            file_id,
+            source.map(|symbol| symbol.id.as_str()),
+            resolved.0,
+            resolved.1.as_deref(),
+            resolved.2,
+            "call",
+            resolved.3,
+            resolved.4,
+        )?;
+    }
+
+    let imports: Vec<ImportRecord> = {
+        let mut statement = transaction
+            .prepare("SELECT file_id, source, imported_name, resolved_path FROM imports")
+            .map_err(database_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .map_err(database_error)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(database_error)?
+    };
+    for (file_id, source, imported_name, resolved_path) in imports {
+        let target_file_id = resolved_path
+            .as_deref()
+            .map(|path| path.replace('\\', "/"))
+            .and_then(|path| files_by_path.get(&path).map(|file| file.id));
+        let target_name = imported_name.as_deref().filter(|name| *name != "*");
+        let target_symbol = target_file_id.and_then(|target_file_id| {
+            target_name.and_then(|name| {
+                symbols_by_file_name
+                    .get(&(target_file_id, name.to_owned()))
+                    .and_then(|symbols| symbols.first())
+            })
+        });
+        let confidence = if target_symbol.is_some() {
+            1.0
+        } else if target_file_id.is_some() {
+            0.7
+        } else {
+            0.4
+        };
+        let method = if target_symbol.is_some() {
+            "semantic"
+        } else if target_file_id.is_some() {
+            "ast"
+        } else {
+            "heuristic"
+        };
+        insert_edge(
+            transaction,
+            file_id,
+            None,
+            target_file_id,
+            target_symbol.map(|symbol| symbol.id.as_str()),
+            imported_name.or(source),
+            "import",
+            confidence,
+            method,
+        )?;
+    }
+
+    let exports: Vec<(i64, String, Option<String>)> = {
+        let mut statement = transaction
+            .prepare("SELECT file_id, exported_name, local_name FROM exports")
+            .map_err(database_error)?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(database_error)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(database_error)?
+    };
+    for (file_id, exported_name, local_name) in exports {
+        let target_symbol = local_name.as_deref().and_then(|name| {
+            symbols_by_file_name
+                .get(&(file_id, name.to_owned()))
+                .and_then(|symbols| symbols.first())
+        });
+        insert_edge(
+            transaction,
+            file_id,
+            None,
+            Some(file_id),
+            target_symbol.map(|symbol| symbol.id.as_str()),
+            Some(exported_name),
+            "export",
+            if target_symbol.is_some() { 1.0 } else { 0.7 },
+            if target_symbol.is_some() {
+                "semantic"
+            } else {
+                "ast"
+            },
+        )?;
+    }
+
+    for test_file in files.iter().filter(|file| is_test_path(&file.path)) {
+        let base = test_base_name(&test_file.path);
+        for implementation in files
+            .iter()
+            .filter(|file| !is_test_path(&file.path) && path_base_name(&file.path) == base)
+        {
+            let implementation_symbols = symbols
+                .iter()
+                .filter(|symbol| symbol.file_id == implementation.id);
+            for symbol in implementation_symbols {
+                insert_edge(
+                    transaction,
+                    test_file.id,
+                    None,
+                    Some(implementation.id),
+                    Some(symbol.id.as_str()),
+                    None,
+                    "test",
+                    0.4,
+                    "heuristic",
+                )?;
+            }
+        }
+    }
+    transaction
+        .execute(
+            "DELETE FROM symbol_edges WHERE id NOT IN (
+                SELECT MIN(id) FROM symbol_edges
+                GROUP BY source_file_id, source_symbol_id, target_file_id, target_symbol_id, target_external_name, edge_type
+            )",
+            [],
+        )
+        .map_err(database_error)?;
+    Ok(())
+}
+
+fn enclosing_symbol(
+    symbols: &[EdgeSymbol],
+    file_id: i64,
+    start: i64,
+    end: i64,
+) -> Option<&EdgeSymbol> {
+    symbols
+        .iter()
+        .filter(|symbol| symbol.file_id == file_id && symbol.start <= start && symbol.end >= end)
+        .min_by_key(|symbol| symbol.end - symbol.start)
+}
+
+fn resolve_target(
+    symbols_by_file_name: &HashMap<(i64, String), Vec<EdgeSymbol>>,
+    imports_by_file: &HashMap<(i64, String), ImportLink>,
+    source_file_id: i64,
+    name: &str,
+) -> (
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    f64,
+    &'static str,
+) {
+    if let Some(import) = imports_by_file.get(&(source_file_id, name.to_owned())) {
+        if let Some(target_file_id) = import.target_file_id {
+            let target_name = import.imported_name.as_deref().unwrap_or(name);
+            let symbol = symbols_by_file_name
+                .get(&(target_file_id, target_name.to_owned()))
+                .and_then(|symbols| symbols.first());
+            return (
+                Some(target_file_id),
+                symbol.map(|symbol| symbol.id.clone()),
+                if symbol.is_some() {
+                    None
+                } else {
+                    Some(target_name.to_owned())
+                },
+                if symbol.is_some() { 1.0 } else { 0.7 },
+                if symbol.is_some() { "semantic" } else { "ast" },
+            );
+        }
+    }
+    let symbol = symbols_by_file_name
+        .get(&(source_file_id, name.to_owned()))
+        .and_then(|symbols| symbols.first());
+    (
+        Some(source_file_id),
+        symbol.map(|symbol| symbol.id.clone()),
+        if symbol.is_some() {
+            None
+        } else {
+            Some(name.to_owned())
+        },
+        if symbol.is_some() { 0.7 } else { 0.4 },
+        if symbol.is_some() { "ast" } else { "heuristic" },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_edge(
+    transaction: &Transaction<'_>,
+    source_file_id: i64,
+    source_symbol_id: Option<&str>,
+    target_file_id: Option<i64>,
+    target_symbol_id: Option<&str>,
+    target_external_name: Option<String>,
+    edge_type: &str,
+    confidence: f64,
+    resolution_method: &str,
+) -> Result<()> {
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO symbol_edges(source_file_id, source_symbol_id, target_file_id, target_symbol_id, target_external_name, edge_type, confidence, resolution_method, metadata_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)",
+            params![source_file_id, source_symbol_id, target_file_id, target_symbol_id, target_external_name, edge_type, confidence, resolution_method],
+        )
+        .map_err(database_error)?;
+    Ok(())
+}
+
+fn path_base_name(path: &str) -> String {
+    path.rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .split('.')
+        .next()
+        .unwrap_or(path)
+        .to_owned()
+}
+
+fn test_base_name(path: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    stem.strip_suffix(".test")
+        .or_else(|| stem.strip_suffix(".spec"))
+        .or_else(|| stem.strip_suffix("_test"))
+        .unwrap_or(stem)
+        .to_owned()
+}
+
+fn is_test_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower
+        .split('/')
+        .any(|part| part == "tests" || part == "__tests__")
+        || lower.contains(".test.")
+        || lower.contains(".spec.")
+        || lower.contains("_test.")
+}
+
 fn initialize_schema(connection: &Connection) -> Result<()> {
     connection
         .execute_batch(
             "PRAGMA foreign_keys = ON;
              CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             CREATE TABLE files(id INTEGER PRIMARY KEY, relative_path TEXT NOT NULL UNIQUE, language TEXT NOT NULL, content_hash TEXT NOT NULL, source TEXT NOT NULL, size_bytes INTEGER NOT NULL);
+             CREATE TABLE files(id INTEGER PRIMARY KEY, relative_path TEXT NOT NULL UNIQUE, language TEXT NOT NULL, content_hash TEXT NOT NULL, public_api_hash TEXT NOT NULL, source TEXT NOT NULL, size_bytes INTEGER NOT NULL);
              CREATE TABLE symbols(id INTEGER PRIMARY KEY, symbol_id TEXT NOT NULL UNIQUE, file_id INTEGER NOT NULL REFERENCES files(id), name TEXT NOT NULL, qualified_name TEXT, kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL);
              CREATE TABLE references_index(id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id), name TEXT NOT NULL, target TEXT, kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL);
              CREATE TABLE imports(id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id), source TEXT NOT NULL, imported_name TEXT, local_name TEXT, resolved_path TEXT);
@@ -459,6 +966,7 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
              CREATE TABLE diagnostics(id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id), severity TEXT NOT NULL, message TEXT NOT NULL);
              CREATE TABLE chunks(id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id), start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, content TEXT NOT NULL);
              CREATE TABLE file_states(relative_path TEXT PRIMARY KEY, status TEXT NOT NULL, observed_hash TEXT, error TEXT, updated_at TEXT NOT NULL);
+             CREATE TABLE symbol_edges(id INTEGER PRIMARY KEY, source_file_id INTEGER NOT NULL REFERENCES files(id), source_symbol_id TEXT, target_file_id INTEGER REFERENCES files(id), target_symbol_id TEXT, target_external_name TEXT, edge_type TEXT NOT NULL, confidence REAL NOT NULL, resolution_method TEXT NOT NULL, metadata_json TEXT, UNIQUE(source_file_id, source_symbol_id, target_file_id, target_symbol_id, target_external_name, edge_type));
              CREATE VIRTUAL TABLE chunk_search USING fts5(relative_path UNINDEXED, start_byte UNINDEXED, end_byte UNINDEXED, content);
             ",
         )

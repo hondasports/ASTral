@@ -108,3 +108,18 @@ fn resolves_relative_imports_with_the_repository_resolver() {
         Some(Path::new("value.ts"))
     );
 }
+
+#[test]
+fn extracts_dynamic_imports_as_module_dependencies() {
+    let result = OxcAnalyzer::default()
+        .analyze(
+            Path::new("app.ts"),
+            "async function load() { return import('./value'); }",
+        )
+        .expect("analysis succeeds");
+
+    assert!(result
+        .imports
+        .iter()
+        .any(|import| import.source == "./value" && import.local_name.is_none()));
+}

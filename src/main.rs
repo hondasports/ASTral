@@ -1,7 +1,10 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use astral::{
-    config::Config, incremental::IncrementalIndexer, index::IndexStore, logging, RepositoryRoot,
+    config::Config,
+    incremental::IncrementalIndexer,
+    index::{IndexStore, RelationshipResult},
+    logging, RepositoryRoot,
 };
 use clap::{CommandFactory, Parser, Subcommand};
 
@@ -24,6 +27,14 @@ enum Commands {
     FindSymbol(SearchArgs),
     /// Read an indexed symbol by its stable identifier.
     ReadSymbol(ReadSymbolArgs),
+    /// Find symbols that reference the target symbol.
+    FindReferences(RelationshipArgs),
+    /// Find callers of the target symbol.
+    FindCallers(RelationshipArgs),
+    /// Find symbols called by the source symbol.
+    FindCallees(RelationshipArgs),
+    /// Find tests related to the target symbol.
+    FindRelatedTests(RelationshipArgs),
     /// Watch the Working Tree and incrementally update the index.
     Watch(StatusArgs),
 }
@@ -48,6 +59,14 @@ struct ReadSymbolArgs {
     repository_root: PathBuf,
     /// Stable symbol identifier returned by find-symbol.
     symbol_id: String,
+}
+
+#[derive(Debug, clap::Args)]
+struct RelationshipArgs {
+    /// A repository directory or a directory below its root.
+    repository_root: PathBuf,
+    /// Symbol identifier, name, or qualified name.
+    symbol: String,
 }
 
 fn main() -> ExitCode {
@@ -85,6 +104,12 @@ fn run() -> astral::Result<()> {
         Commands::SearchCode(args) => search_code(args),
         Commands::FindSymbol(args) => find_symbol(args),
         Commands::ReadSymbol(args) => read_symbol(args),
+        Commands::FindReferences(args) => find_relationships(args, IndexStore::find_references),
+        Commands::FindCallers(args) => find_relationships(args, IndexStore::find_callers),
+        Commands::FindCallees(args) => find_relationships(args, IndexStore::find_callees),
+        Commands::FindRelatedTests(args) => {
+            find_relationships(args, IndexStore::find_related_tests)
+        }
         Commands::Watch(args) => watch(args),
     }
 }
@@ -147,6 +172,29 @@ fn read_symbol(args: ReadSymbolArgs) -> astral::Result<()> {
         "{} {}\n{}",
         result.relative_path, result.name, result.source
     );
+    Ok(())
+}
+
+fn find_relationships(
+    args: RelationshipArgs,
+    search: fn(&std::path::Path, &str) -> astral::Result<Vec<RelationshipResult>>,
+) -> astral::Result<()> {
+    let root = RepositoryRoot::resolve(args.repository_root)?;
+    for result in search(root.path(), &args.symbol)? {
+        println!(
+            "{} {:.1} {} {} -> {} {}",
+            result.edge_type,
+            result.confidence,
+            result.resolution_method,
+            result.source_file,
+            result.target_file.as_deref().unwrap_or("<external>"),
+            result
+                .target_name
+                .as_deref()
+                .or(result.target_external_name.as_deref())
+                .unwrap_or("<unknown>")
+        );
+    }
     Ok(())
 }
 

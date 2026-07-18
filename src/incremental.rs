@@ -12,8 +12,8 @@ use crate::{
     analyzer::{AnalysisResult, LanguageAnalyzer},
     error::{AstralError, Result},
     index::{
-        database_error, file_state_name, hash_bytes, now_string, symbol_kind_name, IndexStore,
-        SCHEMA_VERSION,
+        database_error, file_state_name, hash_bytes, now_string, public_api_hash, rebuild_edges,
+        symbol_kind_name, IndexStore, SCHEMA_VERSION,
     },
     oxc_analyzer::OxcAnalyzer,
     scanner::{SourceFile, SourceScanner},
@@ -30,6 +30,12 @@ pub struct RefreshReport {
     pub stale_files: usize,
     pub removed_files: usize,
     pub rebuilt: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct FileUpdate {
+    indexed: bool,
+    api_changed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +80,8 @@ impl IncrementalIndexer {
         let indexed = indexed_files(&self.database_path)?;
         let analyzer = OxcAnalyzer::new(&self.root);
         let mut report = RefreshReport::default();
+        let mut updated_paths = HashSet::new();
+        let mut api_changed_paths = Vec::new();
 
         for (path, file) in &current {
             let hash = hash_bytes(file.source.as_bytes());
@@ -81,17 +89,44 @@ impl IncrementalIndexer {
                 .map(|state| state.status)
                 .unwrap_or(FileStateStatus::Stale);
             if indexed.get(path) != Some(&hash) || state != FileStateStatus::Fresh {
-                if update_file(&self.database_path, file, &analyzer)? {
+                let update = update_file(&self.database_path, file, &analyzer)?;
+                updated_paths.insert(path.clone());
+                if update.indexed {
                     report.updated_files += 1;
+                    if update.api_changed {
+                        api_changed_paths.push(path.clone());
+                    }
                 } else {
                     report.stale_files += 1;
                 }
             }
         }
 
-        for path in indexed.keys().filter(|path| !current.contains_key(*path)) {
+        let removed_paths: Vec<_> = indexed
+            .keys()
+            .filter(|path| !current.contains_key(*path))
+            .cloned()
+            .collect();
+        for path in &removed_paths {
             remove_file(&self.database_path, path)?;
             report.removed_files += 1;
+        }
+        let mut dependent_paths = HashSet::new();
+        for path in api_changed_paths.iter().chain(&removed_paths) {
+            dependent_paths.extend(importer_paths(&self.database_path, path)?);
+        }
+        for path in dependent_paths {
+            if updated_paths.contains(&path) {
+                continue;
+            }
+            if let Some(file) = current.get(&path) {
+                let update = update_file(&self.database_path, file, &analyzer)?;
+                if update.indexed {
+                    report.updated_files += 1;
+                } else {
+                    report.stale_files += 1;
+                }
+            }
         }
         Ok(report)
     }
@@ -202,11 +237,40 @@ fn indexed_files(database_path: &Path) -> Result<HashMap<String, String>> {
         .map_err(database_error)
 }
 
-fn update_file(database_path: &Path, file: &SourceFile, analyzer: &OxcAnalyzer) -> Result<bool> {
+fn importer_paths(database_path: &Path, target_path: &str) -> Result<Vec<String>> {
+    let connection = Connection::open(database_path).map_err(database_error)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT f.relative_path
+             FROM imports i JOIN files f ON f.id = i.file_id
+             WHERE REPLACE(i.resolved_path, char(92), '/') = ?1
+             ORDER BY f.relative_path",
+        )
+        .map_err(database_error)?;
+    let rows = statement
+        .query_map([target_path], |row| row.get(0))
+        .map_err(database_error)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(database_error)
+}
+
+fn update_file(
+    database_path: &Path,
+    file: &SourceFile,
+    analyzer: &OxcAnalyzer,
+) -> Result<FileUpdate> {
     let analysis = analyzer.analyze(&file.relative_path, &file.source)?;
     let path = relative_path(&file.relative_path);
     let hash = hash_bytes(file.source.as_bytes());
     let mut connection = Connection::open(database_path).map_err(database_error)?;
+    let previous_api_hash = connection
+        .query_row(
+            "SELECT public_api_hash FROM files WHERE relative_path = ?1",
+            [&path],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(database_error)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(database_error)?;
@@ -219,7 +283,7 @@ fn update_file(database_path: &Path, file: &SourceFile, analyzer: &OxcAnalyzer) 
             Some(&diagnostics_message(&analysis)),
         )?;
         transaction.commit().map_err(database_error)?;
-        return Ok(false);
+        return Ok(FileUpdate::default());
     }
     delete_file_records(&transaction, &path)?;
     insert_analysis(&transaction, file, &analysis, &path, &hash)?;
@@ -230,8 +294,13 @@ fn update_file(database_path: &Path, file: &SourceFile, analyzer: &OxcAnalyzer) 
         Some(&hash),
         None,
     )?;
+    rebuild_edges(&transaction)?;
+    let api_hash = public_api_hash(&analysis);
     transaction.commit().map_err(database_error)?;
-    Ok(true)
+    Ok(FileUpdate {
+        indexed: true,
+        api_changed: previous_api_hash.as_deref() != Some(api_hash.as_str()),
+    })
 }
 
 fn remove_file(database_path: &Path, path: &str) -> Result<()> {
@@ -241,6 +310,7 @@ fn remove_file(database_path: &Path, path: &str) -> Result<()> {
         .map_err(database_error)?;
     delete_file_records(&transaction, path)?;
     upsert_state(&transaction, path, FileStateStatus::Missing, None, None)?;
+    rebuild_edges(&transaction)?;
     transaction.commit().map_err(database_error)
 }
 
@@ -256,6 +326,12 @@ fn delete_file_records(transaction: &Transaction<'_>, path: &str) -> Result<()> 
     let Some(file_id) = file_id else {
         return Ok(());
     };
+    transaction
+        .execute(
+            "DELETE FROM symbol_edges WHERE source_file_id = ?1 OR target_file_id = ?1",
+            [file_id],
+        )
+        .map_err(database_error)?;
     transaction
         .execute(
             "DELETE FROM chunk_search WHERE rowid IN (SELECT id FROM chunks WHERE file_id = ?1)",
@@ -310,8 +386,8 @@ fn insert_analysis(
 ) -> Result<()> {
     transaction
         .execute(
-            "INSERT INTO files(relative_path, language, content_hash, source, size_bytes) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![relative_path, file.language, hash, &file.source, file.source.len() as i64],
+            "INSERT INTO files(relative_path, language, content_hash, public_api_hash, source, size_bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![relative_path, file.language, hash, public_api_hash(analysis), &file.source, file.source.len() as i64],
         )
         .map_err(database_error)?;
     let file_id = transaction.last_insert_rowid();

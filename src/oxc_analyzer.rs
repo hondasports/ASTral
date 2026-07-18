@@ -360,6 +360,18 @@ impl<'a> Visit<'a> for Extractor {
         walk::walk_import_declaration(self, it);
     }
 
+    fn visit_import_expression(&mut self, it: &ImportExpression<'a>) {
+        if let Expression::StringLiteral(source) = &it.source {
+            self.imports.push(Import {
+                source: source.value.to_string(),
+                imported_name: None,
+                local_name: None,
+                resolved_path: None,
+            });
+        }
+        walk::walk_import_expression(self, it);
+    }
+
     fn visit_export_named_declaration(&mut self, it: &ExportNamedDeclaration<'a>) {
         if let Some(declaration) = &it.declaration {
             if let Some((name, local_name)) = declaration_name(declaration) {
@@ -374,6 +386,24 @@ impl<'a> Visit<'a> for Extractor {
                 exported_name: module_export_name(&specifier.exported),
                 local_name: Some(module_export_name(&specifier.local)),
             });
+            if let Some(source) = &it.source {
+                self.imports.push(Import {
+                    source: source.value.to_string(),
+                    imported_name: Some(module_export_name(&specifier.local)),
+                    local_name: Some(module_export_name(&specifier.local)),
+                    resolved_path: None,
+                });
+            }
+        }
+        if it.specifiers.is_empty() {
+            if let Some(source) = &it.source {
+                self.imports.push(Import {
+                    source: source.value.to_string(),
+                    imported_name: None,
+                    local_name: None,
+                    resolved_path: None,
+                });
+            }
         }
         walk::walk_export_named_declaration(self, it);
     }
@@ -402,6 +432,12 @@ impl<'a> Visit<'a> for Extractor {
                 .as_ref()
                 .map_or_else(|| "*".to_owned(), module_export_name),
             local_name: None,
+        });
+        self.imports.push(Import {
+            source: it.source.value.to_string(),
+            imported_name: it.exported.as_ref().map(module_export_name),
+            local_name: None,
+            resolved_path: None,
         });
         walk::walk_export_all_declaration(self, it);
     }
