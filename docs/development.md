@@ -3,7 +3,7 @@
 このドキュメントでは、ASTral をローカルで開発するための環境構築手順を説明します。
 
 > [!NOTE]
-> ASTral は初期開発段階です。現在は OXC による JS/TS 索引、SQLite/FTS5 検索、`astral index`、`astral search-code`、`astral find-symbol`、`astral read-symbol` を提供します。MCPサーバーと watcher は後続フェーズで追加します。
+> ASTral は初期開発段階です。現在は OXC による JS/TS 索引、SQLite/FTS5 検索、`astral index`、`astral watch`、`astral search-code`、`astral find-symbol`、`astral read-symbol` を提供します。
 
 ## 必要なツール
 

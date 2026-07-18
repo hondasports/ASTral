@@ -1,6 +1,8 @@
 use std::{path::PathBuf, process::ExitCode};
 
-use astral::{config::Config, index::IndexStore, logging, RepositoryRoot};
+use astral::{
+    config::Config, incremental::IncrementalIndexer, index::IndexStore, logging, RepositoryRoot,
+};
 use clap::{CommandFactory, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -22,6 +24,8 @@ enum Commands {
     FindSymbol(SearchArgs),
     /// Read an indexed symbol by its stable identifier.
     ReadSymbol(ReadSymbolArgs),
+    /// Watch the Working Tree and incrementally update the index.
+    Watch(StatusArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -81,6 +85,7 @@ fn run() -> astral::Result<()> {
         Commands::SearchCode(args) => search_code(args),
         Commands::FindSymbol(args) => find_symbol(args),
         Commands::ReadSymbol(args) => read_symbol(args),
+        Commands::Watch(args) => watch(args),
     }
 }
 
@@ -94,6 +99,8 @@ fn status(args: StatusArgs) -> astral::Result<()> {
         println!("Indexed files: {}", status.file_count);
         println!("Indexed symbols: {}", status.symbol_count);
         println!("Diagnostics: {}", status.diagnostic_count);
+        println!("Stale files: {}", status.stale_count);
+        println!("Missing files: {}", status.missing_count);
     } else {
         println!("Index status: not indexed");
     }
@@ -113,8 +120,7 @@ fn index(args: StatusArgs) -> astral::Result<()> {
 
 fn search_code(args: SearchArgs) -> astral::Result<()> {
     let root = RepositoryRoot::resolve(args.repository_root)?;
-    let database = IndexStore::default_path(root.path());
-    for result in IndexStore::search_code_at(&database, &args.query)? {
+    for result in IndexStore::search_code(root.path(), &args.query)? {
         println!(
             "{}:{}-{}\n{}",
             result.relative_path, result.start_byte, result.end_byte, result.snippet
@@ -125,8 +131,7 @@ fn search_code(args: SearchArgs) -> astral::Result<()> {
 
 fn find_symbol(args: SearchArgs) -> astral::Result<()> {
     let root = RepositoryRoot::resolve(args.repository_root)?;
-    let database = IndexStore::default_path(root.path());
-    for result in IndexStore::find_symbol_at(&database, &args.query)? {
+    for result in IndexStore::find_symbol(root.path(), &args.query)? {
         println!(
             "{} {} {} {}",
             result.symbol_id, result.kind, result.relative_path, result.name
@@ -137,11 +142,17 @@ fn find_symbol(args: SearchArgs) -> astral::Result<()> {
 
 fn read_symbol(args: ReadSymbolArgs) -> astral::Result<()> {
     let root = RepositoryRoot::resolve(args.repository_root)?;
-    let database = IndexStore::default_path(root.path());
-    let result = IndexStore::read_symbol_at(&database, &args.symbol_id)?;
+    let result = IndexStore::read_symbol(root.path(), &args.symbol_id)?;
     println!(
         "{} {}\n{}",
         result.relative_path, result.name, result.source
     );
     Ok(())
+}
+
+fn watch(args: StatusArgs) -> astral::Result<()> {
+    let root = RepositoryRoot::resolve(args.repository_root)?;
+    let database = IndexStore::default_path(root.path());
+    println!("Watching repository: {}", root.path().display());
+    IncrementalIndexer::new(root.path(), database).watch()
 }

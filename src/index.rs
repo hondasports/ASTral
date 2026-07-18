@@ -15,7 +15,22 @@ use crate::{
     scanner::SourceScanner,
 };
 
-const SCHEMA_VERSION: i64 = 1;
+pub(crate) const SCHEMA_VERSION: i64 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileStateStatus {
+    Fresh,
+    Stale,
+    Missing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStateRecord {
+    pub relative_path: String,
+    pub status: FileStateStatus,
+    pub observed_hash: Option<String>,
+    pub error: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexStatus {
@@ -25,6 +40,8 @@ pub struct IndexStatus {
     pub file_count: usize,
     pub symbol_count: usize,
     pub diagnostic_count: usize,
+    pub stale_count: usize,
+    pub missing_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,14 +125,17 @@ impl IndexStore {
     }
 
     pub fn search_code(root: &Path, query: &str) -> Result<Vec<SearchResult>> {
+        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
         Self::search_code_at(&Self::default_path(root), query)
     }
 
     pub fn find_symbol(root: &Path, query: &str) -> Result<Vec<SymbolResult>> {
+        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
         Self::find_symbol_at(&Self::default_path(root), query)
     }
 
     pub fn read_symbol(root: &Path, symbol_id: &str) -> Result<ReadSymbolResult> {
+        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
         Self::read_symbol_at(&Self::default_path(root), symbol_id)
     }
 
@@ -128,6 +148,8 @@ impl IndexStore {
                 file_count: 0,
                 symbol_count: 0,
                 diagnostic_count: 0,
+                stale_count: 0,
+                missing_count: 0,
             });
         }
         let connection = Connection::open(database_path).map_err(database_error)?;
@@ -144,6 +166,14 @@ impl IndexStore {
         let file_count = count(&connection, "files")?;
         let symbol_count = count(&connection, "symbols")?;
         let diagnostic_count = count(&connection, "diagnostics")?;
+        let (stale_count, missing_count) = if table_exists(&connection, "file_states")? {
+            (
+                count_state(&connection, "stale")?,
+                count_state(&connection, "missing")?,
+            )
+        } else {
+            (0, 0)
+        };
         Ok(IndexStatus {
             indexed: schema_version == SCHEMA_VERSION,
             database_path: database_path.to_path_buf(),
@@ -151,15 +181,44 @@ impl IndexStore {
             file_count,
             symbol_count,
             diagnostic_count,
+            stale_count,
+            missing_count,
         })
+    }
+
+    pub fn file_state_at(
+        database_path: &Path,
+        relative_path: &str,
+    ) -> Result<Option<FileStateRecord>> {
+        let connection = Connection::open(database_path).map_err(database_error)?;
+        if !table_exists(&connection, "file_states")? {
+            return Ok(None);
+        }
+        connection
+            .query_row(
+                "SELECT relative_path, status, observed_hash, error FROM file_states WHERE relative_path = ?1",
+                [relative_path],
+                |row| {
+                    let status: String = row.get(1)?;
+                    Ok(FileStateRecord {
+                        relative_path: row.get(0)?,
+                        status: parse_file_state(&status),
+                        observed_hash: row.get(2)?,
+                        error: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(database_error)
     }
 
     pub fn search_code_at(database_path: &Path, query: &str) -> Result<Vec<SearchResult>> {
         let connection = Connection::open(database_path).map_err(database_error)?;
         let mut statement = connection
             .prepare(
-                "SELECT relative_path, start_byte, end_byte, content
-                 FROM chunk_search WHERE chunk_search MATCH ?1 ORDER BY rank LIMIT 100",
+                "SELECT c.relative_path, c.start_byte, c.end_byte, c.content
+                 FROM chunk_search c JOIN file_states fs ON fs.relative_path = c.relative_path
+                 WHERE fs.status = 'fresh' AND chunk_search MATCH ?1 ORDER BY rank LIMIT 100",
             )
             .map_err(database_error)?;
         let rows = statement
@@ -184,6 +243,7 @@ impl IndexStore {
                 "SELECT s.symbol_id, s.name, s.qualified_name, s.kind, f.relative_path,
                         s.start_byte, s.end_byte
                  FROM symbols s JOIN files f ON f.id = s.file_id
+                 JOIN file_states fs ON fs.relative_path = f.relative_path AND fs.status = 'fresh'
                  WHERE s.name LIKE ?1 OR s.qualified_name LIKE ?1
                  ORDER BY s.name, f.relative_path LIMIT 100",
             )
@@ -210,7 +270,9 @@ impl IndexStore {
         connection
             .query_row(
                 "SELECT s.symbol_id, s.name, s.kind, f.relative_path, s.start_byte, s.end_byte, f.source
-                 FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.symbol_id = ?1",
+                 FROM symbols s JOIN files f ON f.id = s.file_id
+                 JOIN file_states fs ON fs.relative_path = f.relative_path AND fs.status = 'fresh'
+                 WHERE s.symbol_id = ?1",
                 [symbol_id],
                 |row| {
                     let source: String = row.get(6)?;
@@ -367,6 +429,12 @@ fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
                 )
                 .map_err(database_error)?;
         }
+        transaction
+            .execute(
+                "INSERT INTO file_states(relative_path, status, observed_hash, error, updated_at) VALUES (?1, 'fresh', ?2, NULL, ?3)",
+                params![relative_path, hash, now_string()],
+            )
+            .map_err(database_error)?;
     }
     transaction
         .execute(
@@ -390,6 +458,7 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
              CREATE TABLE calls(id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id), callee TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL);
              CREATE TABLE diagnostics(id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id), severity TEXT NOT NULL, message TEXT NOT NULL);
              CREATE TABLE chunks(id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id), start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, content TEXT NOT NULL);
+             CREATE TABLE file_states(relative_path TEXT PRIMARY KEY, status TEXT NOT NULL, observed_hash TEXT, error TEXT, updated_at TEXT NOT NULL);
              CREATE VIRTUAL TABLE chunk_search USING fts5(relative_path UNINDEXED, start_byte UNINDEXED, end_byte UNINDEXED, content);
             ",
         )
@@ -439,6 +508,53 @@ fn count(connection: &Connection, table: &str) -> Result<usize> {
         .map_err(database_error)
 }
 
+fn table_exists(connection: &Connection, table: &str) -> Result<bool> {
+    connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |_| Ok(true),
+        )
+        .optional()
+        .map(|value| value.is_some())
+        .map_err(database_error)
+}
+
+fn count_state(connection: &Connection, status: &str) -> Result<usize> {
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM file_states WHERE status = ?1",
+            [status],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count as usize)
+        .map_err(database_error)
+}
+
+fn parse_file_state(status: &str) -> FileStateStatus {
+    match status {
+        "fresh" => FileStateStatus::Fresh,
+        "missing" => FileStateStatus::Missing,
+        _ => FileStateStatus::Stale,
+    }
+}
+
+pub(crate) fn file_state_name(status: FileStateStatus) -> &'static str {
+    match status {
+        FileStateStatus::Fresh => "fresh",
+        FileStateStatus::Stale => "stale",
+        FileStateStatus::Missing => "missing",
+    }
+}
+
+pub(crate) fn now_string() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+        .to_string()
+}
+
 fn temporary_path(database_path: &Path) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -446,7 +562,7 @@ fn temporary_path(database_path: &Path) -> PathBuf {
     database_path.with_extension(format!("sqlite.tmp-{}-{stamp}", std::process::id()))
 }
 
-fn chunk_ranges(source: &str) -> Vec<(usize, usize)> {
+pub(crate) fn chunk_ranges(source: &str) -> Vec<(usize, usize)> {
     const MAX_CHUNK_BYTES: usize = 1_200;
     if source.is_empty() {
         return vec![(0, 0)];
@@ -463,13 +579,13 @@ fn chunk_ranges(source: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-fn hash_bytes(bytes: &[u8]) -> String {
+pub(crate) fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
 }
 
-fn symbol_kind_name(kind: SymbolKind) -> &'static str {
+pub(crate) fn symbol_kind_name(kind: SymbolKind) -> &'static str {
     match kind {
         SymbolKind::Function => "function",
         SymbolKind::Class => "class",
@@ -491,7 +607,7 @@ fn reference_kind_name(kind: ReferenceKind) -> &'static str {
     }
 }
 
-fn database_error(error: rusqlite::Error) -> AstralError {
+pub(crate) fn database_error(error: rusqlite::Error) -> AstralError {
     AstralError::Database {
         message: error.to_string(),
     }
