@@ -77,9 +77,14 @@ fn index_and_search_commands_work_for_a_typescript_repository() {
     let index = Command::new(env!("CARGO_BIN_EXE_astral"))
         .args(["index", path])
         .env("ASTRAL_DATA_DIR", &data_dir)
+        .env("RUST_LOG", "astral=info")
         .output()
         .expect("run astral index");
     assert!(index.status.success());
+    let index_logs = String::from_utf8_lossy(&index.stderr);
+    assert!(index_logs.contains("indexing started"));
+    assert!(index_logs.contains("indexing file"));
+    assert!(index_logs.contains("indexing completed"));
 
     let search = Command::new(env!("CARGO_BIN_EXE_astral"))
         .args(["search-code", path, "App"])

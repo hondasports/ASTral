@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "dataset": "evaluation/search_quality.json",
+  "captured_at": "2026-07-18",
+  "metrics_before": {
+    "cases": 5,
+    "mean_precision_at_5": 0.16,
+    "mean_recall_at_5": 0.8,
+    "mean_reciprocal_rank": 0.8
+  },
+  "failure_cases": [
+    {
+      "id": "semantic-gap-downstream-impact",
+      "query": "show downstream impact",
+      "expected_paths": ["evaluation/fixtures/relationship-edges.ts"],
+      "observed_top_paths": [],
+      "recall_at_5": 0.0,
+      "reciprocal_rank": 0.0,
+      "failure_reason": "query vocabulary does not overlap with the relationship and impact terminology in the target fixture"
+    }
+  ],
+  "follow_up_acceptance": {
+    "semantic_gap_recall_at_5": 1.0,
+    "semantic_gap_mrr": 1.0,
+    "existing_case_regression": false,
+    "provider_disabled_fallback": "lexical-symbol-graph baseline remains available"
+  }
+}
