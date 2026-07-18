@@ -23,11 +23,11 @@ ASTral は次の情報を組み合わせます。
 ## 設計方針
 
 1. **ローカルファースト** — ソースコードと解析結果を開発マシン内で扱う
-2. **コンパイラ情報優先** — 類似度だけでなく、定義・参照・型情報を重視する
+2. **言語専用解析を優先** — JS / TS は OXC を使い、構文・scope・symbol・module resolution を取得する
 3. **差分更新** — 毎回全件解析せず、変更ファイルと影響範囲だけ更新する
 4. **再生成可能** — 検索インデックスは消えてもソースから再構築できる
 5. **読み取り専用 MCP** — 編集やコマンド実行は接続先エージェントへ任せる
-6. **段階的に拡張** — SQLite から開始し、必要になった時点で検索基盤を追加する
+6. **段階的に拡張** — SQLite から開始し、必要になった時点で検索基盤や型解析を追加する
 
 ## 想定アーキテクチャ
 
@@ -52,23 +52,50 @@ Repository index
             ▲
             │
 Indexer
-    ├─ Tree-sitter
-    ├─ language-specific analyzers
+    ├─ OXC: JavaScript / TypeScript / JSX / TSX
+    ├─ Tree-sitter: optional analyzers for other languages
+    ├─ language-specific analyzers / sidecars
     ├─ file watcher
     └─ Git diff / hooks
 ```
+
+## 解析方針
+
+JavaScript / TypeScript 系ファイルは OXC を第一級 analyzer として扱います。
+
+```text
+source
+  ↓
+oxc_parser
+  ↓
+oxc_semantic
+  ↓
+oxc_resolver
+  ↓
+ASTral normalized model
+  ├─ symbols
+  ├─ references
+  ├─ imports / exports
+  ├─ calls
+  └─ chunks
+```
+
+OXC 固有の AST は永続化せず、共通の normalized model へ変換して SQLite に保存します。
+
+完全な TypeScript 型推論や overload resolution が必要になった場合は、TypeScript Language Service、TypeScript Compiler API、typescript-go、LSP などを利用する sidecar を追加します。sidecar が停止していても、OXC ベースの検索へフォールバックできる設計にします。
 
 ## 想定技術スタック
 
 - Rust
 - Tokio
 - MCP Rust SDK (`rmcp`)
-- Tree-sitter
+- OXC (`oxc_parser`, `oxc_semantic`, `oxc_resolver` など)
+- Tree-sitter（OXC 対象外言語の将来候補）
 - SQLite
 - SQLite FTS5
 - `notify` によるファイル監視
 - `git2` または Git CLI
-- TypeScript の精密解析用 sidecar（必要になった場合）
+- TypeScript の精密型解析用 sidecar（必要になった場合）
 
 ## 開発を始める
 
@@ -118,6 +145,7 @@ stdio 接続では、Codex や Claude Code などの MCP クライアントが A
 
 - [開発環境の構築](docs/development.md)
 - [アーキテクチャ](docs/architecture.md)
+- [ADR 0001: JavaScript / TypeScript 解析に OXC を採用する](docs/adr/0001-use-oxc-for-javascript-typescript.md)
 - [インデックスと更新戦略](docs/indexing.md)
 - [解析結果の保存方式](docs/storage.md)
 - [MCP ツール設計](docs/mcp.md)
@@ -134,6 +162,7 @@ stdio 接続では、Codex や Claude Code などの MCP クライアントが A
 - AI モデルのホスティング
 - 解析結果のクラウド同期
 - 大規模な組織横断コード検索
+- TypeScript compiler と同等の完全な型検査
 
 ## ライセンス
 
