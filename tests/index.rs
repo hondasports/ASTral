@@ -36,7 +36,7 @@ fn rebuilds_sqlite_index_and_supports_code_symbol_and_symbol_read_searches() {
     assert!(read.source.contains("function App"));
 
     let status = IndexStore::status_at(&database).expect("status succeeds");
-    assert_eq!(status.schema_version, 1);
+    assert_eq!(status.schema_version, 2);
 }
 
 #[test]

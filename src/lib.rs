@@ -1,6 +1,7 @@
 pub mod analyzer;
 pub mod config;
 pub mod error;
+pub mod incremental;
 pub mod index;
 pub mod logging;
 pub mod oxc_analyzer;
