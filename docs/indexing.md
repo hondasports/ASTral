@@ -46,6 +46,10 @@ Phase 2 では `notify` のイベントを相対 path の dirty set へ集約し
 
 watcher の取りこぼしを修復するため、検索前にも scanner の一覧と content hash を DB と比較します。schema v2、indexer version、除外設定が一致しない場合は差分更新を行わず、full rebuild へフォールバックします。
 
+## Phase 3 の relationship edge
+
+Phase 3 では schema v3 の `symbol_edges` に `reference`、`call`、`import`、`export`、`test` を保存します。各 edge は source / target の file・symbol、未解決名、confidence、resolution method を持ちます。公開 export の hash が変わった場合だけ、resolved import の直接 importer を最大1-hop再解析します。
+
 ## 保存時更新
 
 ファイル watcher が変更を検知したら、短い debounce の後で変更ファイルだけ再解析します。
