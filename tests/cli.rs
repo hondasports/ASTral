@@ -72,15 +72,18 @@ fn index_and_search_commands_work_for_a_typescript_repository() {
     )
     .expect("source");
     let path = directory.path().to_str().expect("UTF-8 path");
+    let data_dir = directory.path().join(".astral-data");
 
     let index = Command::new(env!("CARGO_BIN_EXE_astral"))
         .args(["index", path])
+        .env("ASTRAL_DATA_DIR", &data_dir)
         .output()
         .expect("run astral index");
     assert!(index.status.success());
 
     let search = Command::new(env!("CARGO_BIN_EXE_astral"))
         .args(["search-code", path, "App"])
+        .env("ASTRAL_DATA_DIR", &data_dir)
         .output()
         .expect("run astral search-code");
     assert!(search.status.success());
@@ -88,6 +91,7 @@ fn index_and_search_commands_work_for_a_typescript_repository() {
 
     let symbols = Command::new(env!("CARGO_BIN_EXE_astral"))
         .args(["find-symbol", path, "App"])
+        .env("ASTRAL_DATA_DIR", &data_dir)
         .output()
         .expect("run astral find-symbol");
     assert!(symbols.status.success());
@@ -96,6 +100,7 @@ fn index_and_search_commands_work_for_a_typescript_repository() {
 
     let read = Command::new(env!("CARGO_BIN_EXE_astral"))
         .args(["read-symbol", path, symbol_id])
+        .env("ASTRAL_DATA_DIR", &data_dir)
         .output()
         .expect("run astral read-symbol");
     assert!(read.status.success());

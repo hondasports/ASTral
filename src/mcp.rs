@@ -88,7 +88,7 @@ impl McpServer {
             .into_iter()
             .take(limit)
             .map(|result| {
-                json!({"path": result.relative_path, "startByte": result.start_byte, "endByte": result.end_byte, "content": result.snippet})
+                json!({"path": result.relative_path, "startByte": result.start_byte, "endByte": result.end_byte, "content": result.snippet, "score": result.score, "matchedBy": result.matched_by, "reason": result.reason})
             })
             .collect::<Vec<_>>();
         Ok(output(

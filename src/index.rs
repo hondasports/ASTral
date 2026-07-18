@@ -50,12 +50,15 @@ pub struct IndexStatus {
     pub snapshot_stale: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SearchResult {
     pub relative_path: String,
     pub start_byte: usize,
     pub end_byte: usize,
     pub snippet: String,
+    pub score: f64,
+    pub matched_by: Vec<String>,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,8 +102,12 @@ impl IndexStore {
     pub fn default_path(root: &Path) -> PathBuf {
         let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let project_id = hash_bytes(canonical.to_string_lossy().as_bytes());
-        let base = ProjectDirs::from("com", "astral", "astral")
-            .map(|directories| directories.data_dir().to_path_buf())
+        let base = std::env::var_os("ASTRAL_DATA_DIR")
+            .map(PathBuf::from)
+            .or_else(|| {
+                ProjectDirs::from("com", "astral", "astral")
+                    .map(|directories| directories.data_dir().to_path_buf())
+            })
             .unwrap_or_else(|| PathBuf::from(".astral"));
         base.join("projects")
             .join(&project_id[..24])
@@ -273,25 +280,54 @@ impl IndexStore {
 
     pub fn search_code_at(database_path: &Path, query: &str) -> Result<Vec<SearchResult>> {
         let connection = Connection::open(database_path).map_err(database_error)?;
+        let fts_query = crate::ranking::fts_query(query);
+        if fts_query.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut statement = connection
             .prepare(
-                "SELECT c.relative_path, c.start_byte, c.end_byte, c.content
-                 FROM chunk_search c JOIN file_states fs ON fs.relative_path = c.relative_path
+                "SELECT c.relative_path, c.start_byte, c.end_byte, c.content, rank,
+                        (SELECT COUNT(*) FROM symbol_edges e
+                         WHERE e.source_file_id = f.id OR e.target_file_id = f.id) AS graph_degree
+                 FROM chunk_search c
+                 JOIN files f ON f.relative_path = c.relative_path
+                 JOIN file_states fs ON fs.relative_path = c.relative_path
                  WHERE fs.status = 'fresh' AND chunk_search MATCH ?1 ORDER BY rank LIMIT 100",
             )
             .map_err(database_error)?;
         let rows = statement
-            .query_map([query], |row| {
+            .query_map([fts_query], |row| {
+                let relative_path: String = row.get(0)?;
+                let snippet: String = row.get(3)?;
+                let explanation = crate::ranking::explain(
+                    query,
+                    &relative_path,
+                    &snippet,
+                    row.get(4)?,
+                    row.get::<_, i64>(5)? as usize,
+                );
                 Ok(SearchResult {
-                    relative_path: row.get(0)?,
+                    relative_path,
                     start_byte: row.get::<_, i64>(1)? as usize,
                     end_byte: row.get::<_, i64>(2)? as usize,
-                    snippet: row.get(3)?,
+                    snippet,
+                    score: explanation.score,
+                    matched_by: explanation.matched_by,
+                    reason: explanation.reason,
                 })
             })
             .map_err(database_error)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(database_error)
+        let mut results = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(database_error)?;
+        results.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.relative_path.cmp(&right.relative_path))
+                .then_with(|| left.start_byte.cmp(&right.start_byte))
+        });
+        Ok(results)
     }
 
     pub fn find_symbol_at(database_path: &Path, query: &str) -> Result<Vec<SymbolResult>> {

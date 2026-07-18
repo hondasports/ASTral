@@ -50,6 +50,9 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-features
       - name: CLI smoke tests
+        env:
+          ASTRAL_DATA_DIR: ${{ runner.temp }}/astral-data
         run: |
           cargo run -- --help
           cargo run -- status .
+          cargo run -- evaluate .

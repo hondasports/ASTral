@@ -25,6 +25,7 @@ fn finds_references_callers_callees_and_related_tests() {
     .expect("test source");
     let database = repository.path().join("index.sqlite");
     IndexStore::rebuild_at(repository.path(), &database).expect("initial index");
+    std::env::set_var("ASTRAL_DATA_DIR", repository.path().join(".astral-data"));
 
     let callers = IndexStore::find_callers(repository.path(), "create").expect("callers");
     assert!(callers
