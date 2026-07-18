@@ -6,7 +6,7 @@
 
 全文検索やベクトル検索は、SQLite の正規化データから再構築できる派生インデックスとして扱います。
 
-Phase 3 の schema version は `3` とし、schema・OXC analyzer version・除外設定が変わった場合は migration ではなく full rebuild を実行します。
+Phase 5 の schema version は `4` とし、schema・OXC analyzer version・除外設定が変わった場合は migration ではなく full rebuild を実行します。
 
 Phase 1 では `rusqlite` の `bundled-full` を利用するため、SQLite の native library を別途インストールしなくても Windows・macOS・Linux で同じ手順を実行できます。Phase 2 の schema version は `2` とし、schema・OXC analyzer version・除外設定が変わった場合は migration ではなく full rebuild を実行します。
 
@@ -32,6 +32,8 @@ Derived indexes
     ├─ SQLite FTS5
     └─ vector index (optional)
 ```
+
+Git metadata は indexed HEAD、branch、Working Treeのdirty状態とstatus hashを保持します。HEADが変わった場合は安全のためfull rebuildし、Gitが利用できない場合はcontent hash freshnessへフォールバックします。
 
 ## 保存場所
 

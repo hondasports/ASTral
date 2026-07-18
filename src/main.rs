@@ -121,8 +121,7 @@ async fn run() -> astral::Result<()> {
 fn status(args: StatusArgs) -> astral::Result<()> {
     let root = RepositoryRoot::resolve(args.repository_root)?;
     println!("Repository root: {}", root.path().display());
-    let database = IndexStore::default_path(root.path());
-    let status = IndexStore::status_at(&database)?;
+    let status = IndexStore::get_index_status(root.path())?;
     if status.indexed {
         println!("Index status: indexed");
         println!("Indexed files: {}", status.file_count);
@@ -130,6 +129,18 @@ fn status(args: StatusArgs) -> astral::Result<()> {
         println!("Diagnostics: {}", status.diagnostic_count);
         println!("Stale files: {}", status.stale_count);
         println!("Missing files: {}", status.missing_count);
+        if let Some(head) = status.snapshot_head {
+            println!("Indexed HEAD: {head}");
+            println!(
+                "Working Tree: {} ({} dirty files)",
+                if status.working_tree_dirty {
+                    "dirty"
+                } else {
+                    "clean"
+                },
+                status.dirty_file_count
+            );
+        }
     } else {
         println!("Index status: not indexed");
     }

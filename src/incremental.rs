@@ -71,6 +71,14 @@ impl IncrementalIndexer {
                 ..RefreshReport::default()
             });
         }
+        let git = crate::git::inspect(&self.root)?;
+        if git.available && git_head_changed(&self.database_path, &git)? {
+            IndexStore::rebuild_at(&self.root, &self.database_path)?;
+            return Ok(RefreshReport {
+                rebuilt: true,
+                ..RefreshReport::default()
+            });
+        }
 
         let files = SourceScanner::new(&self.root).scan()?;
         let current: HashMap<String, SourceFile> = files
@@ -128,6 +136,7 @@ impl IncrementalIndexer {
                 }
             }
         }
+        record_git_state(&self.database_path, &git)?;
         Ok(report)
     }
 
@@ -235,6 +244,44 @@ fn indexed_files(database_path: &Path) -> Result<HashMap<String, String>> {
         .map_err(database_error)?;
     rows.collect::<rusqlite::Result<HashMap<_, _>>>()
         .map_err(database_error)
+}
+
+fn git_head_changed(database_path: &Path, git: &crate::git::GitSnapshot) -> Result<bool> {
+    let connection = Connection::open(database_path).map_err(database_error)?;
+    let stored = connection
+        .query_row(
+            "SELECT value FROM metadata WHERE key = 'git_head'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(database_error)?;
+    Ok(stored.as_deref() != git.head.as_deref())
+}
+
+fn record_git_state(database_path: &Path, git: &crate::git::GitSnapshot) -> Result<()> {
+    let mut connection = Connection::open(database_path).map_err(database_error)?;
+    let transaction = connection.transaction().map_err(database_error)?;
+    for (key, value) in [
+        ("git_available", git.available.to_string()),
+        ("git_head", git.head.clone().unwrap_or_default()),
+        ("git_branch", git.branch.clone().unwrap_or_default()),
+        ("git_dirty", git.dirty.to_string()),
+        ("git_dirty_file_count", git.dirty_file_count.to_string()),
+        (
+            "git_worktree_hash",
+            git.worktree_hash.clone().unwrap_or_default(),
+        ),
+    ] {
+        transaction
+            .execute(
+                "INSERT INTO metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .map_err(database_error)?;
+    }
+    transaction.commit().map_err(database_error)
 }
 
 fn importer_paths(database_path: &Path, target_path: &str) -> Result<Vec<String>> {

@@ -16,7 +16,7 @@ use crate::{
     scanner::SourceScanner,
 };
 
-pub(crate) const SCHEMA_VERSION: i64 = 3;
+pub(crate) const SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileStateStatus {
@@ -43,6 +43,11 @@ pub struct IndexStatus {
     pub diagnostic_count: usize,
     pub stale_count: usize,
     pub missing_count: usize,
+    pub snapshot_head: Option<String>,
+    pub snapshot_branch: Option<String>,
+    pub working_tree_dirty: bool,
+    pub dirty_file_count: usize,
+    pub snapshot_stale: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +190,11 @@ impl IndexStore {
                 diagnostic_count: 0,
                 stale_count: 0,
                 missing_count: 0,
+                snapshot_head: None,
+                snapshot_branch: None,
+                working_tree_dirty: false,
+                dirty_file_count: 0,
+                snapshot_stale: false,
             });
         }
         let connection = Connection::open(database_path).map_err(database_error)?;
@@ -209,6 +219,8 @@ impl IndexStore {
         } else {
             (0, 0)
         };
+        let git_available =
+            metadata_value(&connection, "git_available")?.is_some_and(|value| value == "true");
         Ok(IndexStatus {
             indexed: schema_version == SCHEMA_VERSION,
             database_path: database_path.to_path_buf(),
@@ -218,6 +230,18 @@ impl IndexStore {
             diagnostic_count,
             stale_count,
             missing_count,
+            snapshot_head: git_available
+                .then(|| metadata_value(&connection, "git_head").ok().flatten())
+                .flatten(),
+            snapshot_branch: git_available
+                .then(|| metadata_value(&connection, "git_branch").ok().flatten())
+                .flatten(),
+            working_tree_dirty: metadata_value(&connection, "git_dirty")?
+                .is_some_and(|value| value == "true"),
+            dirty_file_count: metadata_value(&connection, "git_dirty_file_count")?
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_default(),
+            snapshot_stale: false,
         })
     }
 
@@ -386,8 +410,22 @@ fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
 
     transaction
         .execute(
-            "INSERT INTO metadata(key, value) VALUES ('schema_version', ?1), ('indexer_version', 'phase-1-oxc')",
+            "INSERT INTO metadata(key, value) VALUES ('schema_version', ?1), ('indexer_version', 'phase-5-git')",
             [SCHEMA_VERSION.to_string()],
+        )
+        .map_err(database_error)?;
+    let git = crate::git::inspect(root)?;
+    transaction
+        .execute(
+            "INSERT INTO metadata(key, value) VALUES ('git_available', ?1), ('git_head', ?2), ('git_branch', ?3), ('git_dirty', ?4), ('git_dirty_file_count', ?5), ('git_worktree_hash', ?6)",
+            params![
+                git.available.to_string(),
+                git.head.unwrap_or_default(),
+                git.branch.unwrap_or_default(),
+                git.dirty.to_string(),
+                git.dirty_file_count.to_string(),
+                git.worktree_hash.unwrap_or_default()
+            ],
         )
         .map_err(database_error)?;
 
@@ -1025,6 +1063,15 @@ fn table_exists(connection: &Connection, table: &str) -> Result<bool> {
         )
         .optional()
         .map(|value| value.is_some())
+        .map_err(database_error)
+}
+
+fn metadata_value(connection: &Connection, key: &str) -> Result<Option<String>> {
+    connection
+        .query_row("SELECT value FROM metadata WHERE key = ?1", [key], |row| {
+            row.get(0)
+        })
+        .optional()
         .map_err(database_error)
 }
 
