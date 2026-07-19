@@ -120,27 +120,103 @@ ASTral は次の三段構えでインデックスの鮮度を保ちます。
 
 解析中の一時的な構文エラーでは、直前の正常な結果を残して `stale` として扱います。
 
-## 想定 CLI
+## クイックスタート
+
+### 1. ビルド
+
+```bash
+git clone https://github.com/hondasports/ASTral.git
+cd ASTral
+cargo build --release
+```
+
+`target/release/astral` が生成されます。PATH を通すか、`cargo install --path .` でインストールできます。
+
+### 2. リポジトリを登録
 
 ```bash
 astral register my-repo .
-astral unregister my-repo
+```
+
+`my-repo` は検索で使う名前です。登録情報と索引は OS のユーザーデータ領域に保存されます。保存先を変えたい場合は `ASTRAL_DATA_DIR` 環境変数を設定してください。
+
+### 3. 索引を作成
+
+```bash
 astral index my-repo
+```
+
+`status` で索引の状態を確認できます。
+
+```bash
 astral status my-repo
-astral search-code my-repo "RepositoryRoot"
-astral find-symbol my-repo "RepositoryRoot"
-astral serve
 ```
 
-## MCP 接続イメージ
+### 4. CLI で検索
 
-```toml
-[mcp_servers.astral]
-command = "astral"
-args = ["serve"]
+```bash
+# 自然言語 / エラー文字列で検索
+astral search-code my-repo "owner を譲渡してから退会する処理"
+
+# シンボル名で検索
+astral find-symbol my-repo "transferOwnership"
+
+# シンボル ID から本文を読む
+astral read-symbol my-repo "symbol:my-repo:src/auth/session.ts:createSession:12:0"
+
+# 関係をたどる
+astral find-references my-repo "transferOwnership"
+astral find-callers my-repo "transferOwnership"
+astral find-related-tests my-repo "transferOwnership"
 ```
 
-stdio 接続では、Codex や Claude Code などの MCP クライアントが ASTral を必要な間だけ子プロセスとして起動します。常時起動は不要です。
+### 5. MCP サーバーとして使う
+
+`astral serve` で stdio 接続の MCP サーバーを起動します。MCP クライアントが必要な間だけ子プロセスとして起動するため、常時起動は不要です。
+
+利用可能なツールは `search_code`、`find_symbol`、`read_symbol`、`find_references`、`find_callers`、`find_callees`、`find_related_tests`、`get_index_status` です。
+
+設定例（Windsurf / Claude Code など）:
+
+```json
+{
+  "mcpServers": {
+    "astral": {
+      "command": "C:\\Users\\<username>\\Documents\\sourcecode\\ASTral\\target\\release\\astral.exe",
+      "args": ["serve"],
+      "env": {
+        "ASTRAL_DATA_DIR": "C:\\Users\\<username>\\AppData\\Roaming\\astral"
+      }
+    }
+  }
+}
+```
+
+Unix 系の例:
+
+```json
+{
+  "mcpServers": {
+    "astral": {
+      "command": "/path/to/astral",
+      "args": ["serve"],
+      "env": {
+        "ASTRAL_DATA_DIR": "$HOME/.local/share/astral"
+      }
+    }
+  }
+}
+```
+
+AI エージェントからは「`my-repo` の `transferOwnership` 関数を探して」のように自然言語で頼むか、`mcp0_find_symbol` などのツールを直接呼び出せます。
+
+### 6. 索引の鮮度を保つ
+
+```bash
+astral watch my-repo
+```
+
+ファイル保存を監視して、索引を差分更新します。`RUST_LOG=astral=info` を設定すると進捗が表示されます。
 
 ## ドキュメント
 
