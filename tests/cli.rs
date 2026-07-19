@@ -1,5 +1,6 @@
 use std::{fs, process::Command};
 
+use astral::index::IndexStore;
 use tempfile::tempdir;
 
 fn event_message(event: &serde_json::Value) -> Option<&str> {
@@ -23,51 +24,65 @@ fn help_succeeds() {
 }
 
 #[test]
-fn status_resolves_a_nested_path_and_reports_not_indexed() {
+fn register_and_status_resolve_a_repository_name() {
     let directory = tempdir().expect("temporary directory");
     fs::create_dir(directory.path().join(".git")).expect("git metadata");
-    let nested = directory.path().join("src");
-    fs::create_dir(&nested).expect("nested directory");
     let data_dir = directory.path().join(".astral-data");
 
+    let register = Command::new(env!("CARGO_BIN_EXE_astral"))
+        .args([
+            "register",
+            "sample-repo",
+            directory.path().to_str().expect("UTF-8 path"),
+        ])
+        .env("ASTRAL_DATA_DIR", &data_dir)
+        .output()
+        .expect("run astral register");
+    assert!(register.status.success());
+
     let output = Command::new(env!("CARGO_BIN_EXE_astral"))
-        .args(["status", nested.to_str().expect("UTF-8 path")])
+        .args(["status", "sample-repo"])
         .env("ASTRAL_DATA_DIR", &data_dir)
         .output()
         .expect("run astral status");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Repository: sample-repo"));
     assert!(stdout.contains("Repository root:"));
     assert!(stdout.contains("Index status: not indexed"));
 }
 
 #[test]
-fn status_rejects_a_path_without_a_repository_root() {
+fn status_rejects_an_unregistered_repository_name() {
     let directory = tempdir().expect("temporary directory");
     let data_dir = directory.path().join(".astral-data");
 
     let output = Command::new(env!("CARGO_BIN_EXE_astral"))
-        .args(["status", directory.path().to_str().expect("UTF-8 path")])
+        .args(["status", "missing-repo"])
         .env("ASTRAL_DATA_DIR", &data_dir)
         .output()
         .expect("run astral status");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("repository root not found"));
+    assert!(stderr.contains("repository not registered"));
     let log_source = fs::read_to_string(data_dir.join("astral.log")).expect("read astral log");
-    assert!(log_source.contains("\"error_kind\":\"repository_root_not_found\""));
+    assert!(log_source.contains("\"error_kind\":\"repository_not_registered\""));
 }
 
 #[test]
-fn status_rejects_a_missing_path() {
+fn register_rejects_a_missing_path() {
     let directory = tempdir().expect("temporary directory");
     let missing = directory.path().join("missing");
     let data_dir = directory.path().join(".astral-data");
 
     let output = Command::new(env!("CARGO_BIN_EXE_astral"))
-        .args(["status", missing.to_str().expect("UTF-8 path")])
+        .args([
+            "register",
+            "missing-repo",
+            missing.to_str().expect("UTF-8 path"),
+        ])
         .env("ASTRAL_DATA_DIR", &data_dir)
         .output()
         .expect("run astral status");
@@ -89,8 +104,15 @@ fn index_and_search_commands_work_for_a_typescript_repository() {
     let path = directory.path().to_str().expect("UTF-8 path");
     let data_dir = directory.path().join(".astral-data");
 
+    let register = Command::new(env!("CARGO_BIN_EXE_astral"))
+        .args(["register", "sample-repo", path])
+        .env("ASTRAL_DATA_DIR", &data_dir)
+        .output()
+        .expect("run astral register");
+    assert!(register.status.success());
+
     let index = Command::new(env!("CARGO_BIN_EXE_astral"))
-        .args(["index", path])
+        .args(["index", "sample-repo"])
         .env("ASTRAL_DATA_DIR", &data_dir)
         .env("RUST_LOG", "astral=info")
         .output()
@@ -122,7 +144,7 @@ fn index_and_search_commands_work_for_a_typescript_repository() {
     assert!(!log_source.contains("function App"));
 
     let search = Command::new(env!("CARGO_BIN_EXE_astral"))
-        .args(["search-code", path, "App"])
+        .args(["search-code", "sample-repo", "App"])
         .env("ASTRAL_DATA_DIR", &data_dir)
         .output()
         .expect("run astral search-code");
@@ -130,7 +152,7 @@ fn index_and_search_commands_work_for_a_typescript_repository() {
     assert!(String::from_utf8_lossy(&search.stdout).contains("app.ts"));
 
     let symbols = Command::new(env!("CARGO_BIN_EXE_astral"))
-        .args(["find-symbol", path, "App"])
+        .args(["find-symbol", "sample-repo", "App"])
         .env("ASTRAL_DATA_DIR", &data_dir)
         .output()
         .expect("run astral find-symbol");
@@ -139,10 +161,53 @@ fn index_and_search_commands_work_for_a_typescript_repository() {
     let symbol_id = symbol_line.split_whitespace().next().expect("symbol id");
 
     let read = Command::new(env!("CARGO_BIN_EXE_astral"))
-        .args(["read-symbol", path, symbol_id])
+        .args(["read-symbol", "sample-repo", symbol_id])
         .env("ASTRAL_DATA_DIR", &data_dir)
         .output()
         .expect("run astral read-symbol");
     assert!(read.status.success());
     assert!(String::from_utf8_lossy(&read.stdout).contains("function App"));
+}
+
+#[test]
+fn unregister_removes_only_the_named_repository_index() {
+    let first = tempdir().expect("first repository");
+    let second = tempdir().expect("second repository");
+    fs::create_dir(first.path().join(".git")).expect("first git metadata");
+    fs::create_dir(second.path().join(".git")).expect("second git metadata");
+    fs::write(first.path().join("app.ts"), "export const first = 1;\n").expect("first source");
+    fs::write(second.path().join("app.ts"), "export const second = 2;\n").expect("second source");
+    let data_dir = first.path().join(".astral-data");
+    let first_path = first.path().to_str().expect("UTF-8 path");
+    let second_path = second.path().to_str().expect("UTF-8 path");
+
+    for (name, path) in [("first-repo", first_path), ("second-repo", second_path)] {
+        let register = Command::new(env!("CARGO_BIN_EXE_astral"))
+            .args(["register", name, path])
+            .env("ASTRAL_DATA_DIR", &data_dir)
+            .output()
+            .expect("run astral register");
+        assert!(register.status.success());
+        let index = Command::new(env!("CARGO_BIN_EXE_astral"))
+            .args(["index", name])
+            .env("ASTRAL_DATA_DIR", &data_dir)
+            .output()
+            .expect("run astral index");
+        assert!(index.status.success());
+    }
+
+    let first_database = IndexStore::path_in_data_dir(first.path(), &data_dir);
+    let second_database = IndexStore::path_in_data_dir(second.path(), &data_dir);
+    assert!(first_database.is_file());
+    assert!(second_database.is_file());
+
+    let unregister = Command::new(env!("CARGO_BIN_EXE_astral"))
+        .args(["unregister", "first-repo"])
+        .env("ASTRAL_DATA_DIR", &data_dir)
+        .output()
+        .expect("run astral unregister");
+
+    assert!(unregister.status.success());
+    assert!(!first_database.exists());
+    assert!(second_database.is_file());
 }

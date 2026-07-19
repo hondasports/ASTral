@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::fs;
 
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -9,7 +9,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{incremental::IncrementalIndexer, index::IndexStore, RepositoryRoot};
+use crate::{
+    incremental::IncrementalIndexer,
+    index::IndexStore,
+    repository::{RegisteredRepository, RepositoryRegistry},
+};
 
 const MAX_RESULTS: usize = 100;
 const MAX_READ_LINES: usize = 120;
@@ -19,25 +23,25 @@ type McpResponse = serde_json::Map<String, Value>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RepositoryInput {
-    pub repository_root: String,
+    pub repository_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct QueryInput {
-    pub repository_root: String,
+    pub repository_name: String,
     pub query: String,
     pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SymbolInput {
-    pub repository_root: String,
+    pub repository_name: String,
     pub symbol: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadCodeInput {
-    pub repository_root: String,
+    pub repository_name: String,
     pub path: String,
     pub start_line: usize,
     pub end_line: usize,
@@ -45,13 +49,13 @@ pub struct ReadCodeInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadSymbolInput {
-    pub repository_root: String,
+    pub repository_name: String,
     pub symbol_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RefreshInput {
-    pub repository_root: String,
+    pub repository_name: String,
     pub wait: Option<bool>,
 }
 
@@ -81,9 +85,13 @@ impl McpServer {
         &self,
         params: Parameters<QueryInput>,
     ) -> Result<Json<McpResponse>, String> {
-        let root = resolve_root(&params.0.repository_root)?;
+        let repository = resolve_repository(&params.0.repository_name)?;
         let limit = bounded_limit(params.0.limit);
-        let results = IndexStore::search_code(root.path(), &params.0.query)
+        let results = IndexStore::search_code(
+            &repository.name,
+            repository.root.path(),
+            &params.0.query,
+        )
             .map_err(|error| error.to_string())?
             .into_iter()
             .take(limit)
@@ -92,7 +100,7 @@ impl McpServer {
             })
             .collect::<Vec<_>>();
         Ok(output(
-            json!({"results": results, "truncated": results.len() == limit}),
+            json!({"repositoryName": repository.name, "results": results, "truncated": results.len() == limit}),
         ))
     }
 
@@ -101,16 +109,20 @@ impl McpServer {
         &self,
         params: Parameters<QueryInput>,
     ) -> Result<Json<McpResponse>, String> {
-        let root = resolve_root(&params.0.repository_root)?;
+        let repository = resolve_repository(&params.0.repository_name)?;
         let limit = bounded_limit(params.0.limit);
-        let results = IndexStore::find_symbol(root.path(), &params.0.query)
+        let results = IndexStore::find_symbol(
+            &repository.name,
+            repository.root.path(),
+            &params.0.query,
+        )
             .map_err(|error| error.to_string())?
             .into_iter()
             .take(limit)
             .map(|result| json!({"symbolId": result.symbol_id, "name": result.name, "kind": result.kind, "path": result.relative_path, "startByte": result.start_byte, "endByte": result.end_byte}))
             .collect::<Vec<_>>();
         Ok(output(
-            json!({"results": results, "truncated": results.len() == limit}),
+            json!({"repositoryName": repository.name, "results": results, "truncated": results.len() == limit}),
         ))
     }
 
@@ -119,11 +131,15 @@ impl McpServer {
         &self,
         params: Parameters<ReadSymbolInput>,
     ) -> Result<Json<McpResponse>, String> {
-        let root = resolve_root(&params.0.repository_root)?;
-        let result = IndexStore::read_symbol(root.path(), &params.0.symbol_id)
-            .map_err(|error| error.to_string())?;
+        let repository = resolve_repository(&params.0.repository_name)?;
+        let result = IndexStore::read_symbol(
+            &repository.name,
+            repository.root.path(),
+            &params.0.symbol_id,
+        )
+        .map_err(|error| error.to_string())?;
         Ok(output(
-            json!({"symbolId": result.symbol_id, "name": result.name, "kind": result.kind, "path": result.relative_path, "source": bounded_text(&result.source)}),
+            json!({"repositoryName": repository.name, "symbolId": result.symbol_id, "name": result.name, "kind": result.kind, "path": result.relative_path, "source": bounded_text(&result.source)}),
         ))
     }
 
@@ -132,16 +148,16 @@ impl McpServer {
         &self,
         params: Parameters<ReadCodeInput>,
     ) -> Result<Json<McpResponse>, String> {
-        let root = resolve_root(&params.0.repository_root)?;
+        let repository = resolve_repository(&params.0.repository_name)?;
         if params.0.start_line == 0 || params.0.end_line < params.0.start_line {
             return Err("invalid line range".to_owned());
         }
         if params.0.end_line - params.0.start_line + 1 > MAX_READ_LINES {
             return Err(format!("line range exceeds {MAX_READ_LINES} lines"));
         }
-        let path = root.path().join(&params.0.path);
+        let path = repository.root.path().join(&params.0.path);
         let canonical = path.canonicalize().map_err(|error| error.to_string())?;
-        if !canonical.starts_with(root.path()) {
+        if !canonical.starts_with(repository.root.path()) {
             return Err("path is outside repository root".to_owned());
         }
         let source = fs::read_to_string(&canonical).map_err(|error| error.to_string())?;
@@ -152,7 +168,7 @@ impl McpServer {
             .collect::<Vec<_>>()
             .join("\n");
         Ok(output(
-            json!({"path": canonical.strip_prefix(root.path()).unwrap_or(&canonical).to_string_lossy().replace('\\', "/"), "startLine": params.0.start_line, "endLine": params.0.end_line, "content": bounded_text(&content)}),
+            json!({"repositoryName": repository.name, "path": canonical.strip_prefix(repository.root.path()).unwrap_or(&canonical).to_string_lossy().replace('\\', "/"), "startLine": params.0.start_line, "endLine": params.0.end_line, "content": bounded_text(&content)}),
         ))
     }
 
@@ -193,11 +209,11 @@ impl McpServer {
         &self,
         params: Parameters<RepositoryInput>,
     ) -> Result<Json<McpResponse>, String> {
-        let root = resolve_root(&params.0.repository_root)?;
-        let status =
-            IndexStore::get_index_status(root.path()).map_err(|error| error.to_string())?;
+        let repository = resolve_repository(&params.0.repository_name)?;
+        let status = IndexStore::get_index_status(repository.root.path())
+            .map_err(|error| error.to_string())?;
         Ok(output(
-            json!({"repositoryRoot": root.path(), "indexed": status.indexed, "schemaVersion": status.schema_version, "files": status.file_count, "symbols": status.symbol_count, "diagnostics": status.diagnostic_count, "staleFiles": status.stale_count, "missingFiles": status.missing_count, "snapshotHead": status.snapshot_head, "snapshotBranch": status.snapshot_branch, "workingTreeDirty": status.working_tree_dirty, "dirtyFiles": status.dirty_file_count}),
+            json!({"repositoryName": repository.name, "repositoryRoot": repository.root.path(), "indexed": status.indexed, "schemaVersion": status.schema_version, "files": status.file_count, "symbols": status.symbol_count, "diagnostics": status.diagnostic_count, "staleFiles": status.stale_count, "missingFiles": status.missing_count, "snapshotHead": status.snapshot_head, "snapshotBranch": status.snapshot_branch, "workingTreeDirty": status.working_tree_dirty, "dirtyFiles": status.dirty_file_count}),
         ))
     }
 
@@ -206,12 +222,16 @@ impl McpServer {
         &self,
         params: Parameters<RefreshInput>,
     ) -> Result<Json<McpResponse>, String> {
-        let root = resolve_root(&params.0.repository_root)?;
-        let report = IncrementalIndexer::new(root.path(), IndexStore::default_path(root.path()))
-            .refresh()
-            .map_err(|error| error.to_string())?;
+        let repository = resolve_repository(&params.0.repository_name)?;
+        let report = IncrementalIndexer::new(
+            &repository.name,
+            repository.root.path(),
+            IndexStore::default_path(repository.root.path()),
+        )
+        .refresh()
+        .map_err(|error| error.to_string())?;
         Ok(output(
-            json!({"updatedFiles": report.updated_files, "staleFiles": report.stale_files, "removedFiles": report.removed_files, "rebuilt": report.rebuilt}),
+            json!({"repositoryName": repository.name, "updatedFiles": report.updated_files, "staleFiles": report.stale_files, "removedFiles": report.removed_files, "rebuilt": report.rebuilt}),
         ))
     }
 }
@@ -237,8 +257,10 @@ pub async fn serve_stdio() -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn resolve_root(path: &str) -> Result<RepositoryRoot, String> {
-    RepositoryRoot::resolve(PathBuf::from(path)).map_err(|error| error.to_string())
+fn resolve_repository(name: &str) -> Result<RegisteredRepository, String> {
+    RepositoryRegistry::new()
+        .resolve(name)
+        .map_err(|error| error.to_string())
 }
 
 fn bounded_limit(limit: Option<usize>) -> usize {
@@ -255,17 +277,21 @@ fn output(value: Value) -> Json<McpResponse> {
 
 fn relationship(
     input: SymbolInput,
-    search: fn(&std::path::Path, &str) -> crate::Result<Vec<crate::index::RelationshipResult>>,
+    search: fn(
+        &str,
+        &std::path::Path,
+        &str,
+    ) -> crate::Result<Vec<crate::index::RelationshipResult>>,
 ) -> Result<Json<McpResponse>, String> {
-    let root = resolve_root(&input.repository_root)?;
-    let results = search(root.path(), &input.symbol)
+    let repository = resolve_repository(&input.repository_name)?;
+    let results = search(&repository.name, repository.root.path(), &input.symbol)
         .map_err(|error| error.to_string())?
         .into_iter()
         .take(MAX_RESULTS)
         .map(|result| json!({"edgeType": result.edge_type, "confidence": result.confidence, "resolutionMethod": result.resolution_method, "sourcePath": result.source_file, "sourceSymbolId": result.source_symbol_id, "sourceName": result.source_name, "targetPath": result.target_file, "targetSymbolId": result.target_symbol_id, "targetName": result.target_name, "targetExternalName": result.target_external_name}))
         .collect::<Vec<_>>();
     Ok(output(
-        json!({"results": results, "truncated": results.len() == MAX_RESULTS}),
+        json!({"repositoryName": repository.name, "results": results, "truncated": results.len() == MAX_RESULTS}),
     ))
 }
 
@@ -287,5 +313,21 @@ mod tests {
         assert!(!names
             .iter()
             .any(|name| name.contains("edit") || name.contains("command")));
+    }
+
+    #[test]
+    fn requires_repository_name_in_every_tool_input_schema() {
+        for tool in McpServer::new().tool_router.list_all() {
+            let required = tool
+                .input_schema
+                .get("required")
+                .and_then(serde_json::Value::as_array)
+                .expect("tool input schema required fields");
+            assert!(
+                required.iter().any(|field| field == "repository_name"),
+                "tool {} must require repository_name",
+                tool.name
+            );
+        }
     }
 }

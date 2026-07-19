@@ -5,7 +5,6 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use sha2::{Digest, Sha256};
 
@@ -13,10 +12,11 @@ use crate::{
     analyzer::{LanguageAnalyzer, ReferenceKind, SymbolKind},
     error::{AstralError, Result},
     oxc_analyzer::OxcAnalyzer,
+    repository::default_data_dir,
     scanner::SourceScanner,
 };
 
-pub(crate) const SCHEMA_VERSION: i64 = 4;
+pub(crate) const SCHEMA_VERSION: i64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileStateStatus {
@@ -100,21 +100,40 @@ pub struct IndexStore;
 
 impl IndexStore {
     pub fn default_path(root: &Path) -> PathBuf {
+        Self::path_in_data_dir(root, &default_data_dir())
+    }
+
+    pub fn path_in_data_dir(root: &Path, data_dir: &Path) -> PathBuf {
         let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let project_id = hash_bytes(canonical.to_string_lossy().as_bytes());
-        let base = std::env::var_os("ASTRAL_DATA_DIR")
-            .map(PathBuf::from)
-            .or_else(|| {
-                ProjectDirs::from("com", "astral", "astral")
-                    .map(|directories| directories.data_dir().to_path_buf())
-            })
-            .unwrap_or_else(|| PathBuf::from(".astral"));
-        base.join("projects")
+        data_dir
+            .join("projects")
             .join(&project_id[..24])
             .join("index.sqlite")
     }
 
-    pub fn rebuild_at(root: &Path, database_path: &Path) -> Result<IndexStatus> {
+    pub fn remove_for_root(root: &Path) -> Result<bool> {
+        let database_path = Self::default_path(root);
+        let previous_path = database_path.with_extension("sqlite.previous");
+        let mut removed = false;
+        for path in [database_path, previous_path] {
+            if path.is_file() {
+                fs::remove_file(&path).map_err(|source| AstralError::PathAccess {
+                    path: path.clone(),
+                    source,
+                })?;
+                removed = true;
+            }
+        }
+        Ok(removed)
+    }
+
+    pub fn rebuild_at(
+        repository_name: &str,
+        root: &Path,
+        database_path: &Path,
+    ) -> Result<IndexStatus> {
+        crate::repository::validate_repository_name(repository_name)?;
         if let Some(parent) = database_path.parent() {
             fs::create_dir_all(parent).map_err(|source| AstralError::PathAccess {
                 path: parent.to_path_buf(),
@@ -130,7 +149,7 @@ impl IndexStore {
             let mut connection = Connection::open(&temporary_path).map_err(database_error)?;
             initialize_schema(&connection)?;
             let transaction = connection.transaction().map_err(database_error)?;
-            populate(&transaction, root)?;
+            populate(&transaction, repository_name, root)?;
             transaction.commit().map_err(database_error)?;
             drop(connection);
             replace_database(&temporary_path, database_path)?;
@@ -161,9 +180,9 @@ impl IndexStore {
         }
     }
 
-    pub fn rebuild(root: &Path) -> Result<IndexStatus> {
+    pub fn rebuild(repository_name: &str, root: &Path) -> Result<IndexStatus> {
         let database_path = Self::default_path(root);
-        Self::rebuild_at(root, &database_path)
+        Self::rebuild_at(repository_name, root, &database_path)
     }
 
     pub fn get_index_status(root: &Path) -> Result<IndexStatus> {
@@ -171,38 +190,101 @@ impl IndexStore {
         Self::status_at(&database_path)
     }
 
-    pub fn search_code(root: &Path, query: &str) -> Result<Vec<SearchResult>> {
-        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
+    pub fn search_code(
+        repository_name: &str,
+        root: &Path,
+        query: &str,
+    ) -> Result<Vec<SearchResult>> {
+        crate::incremental::IncrementalIndexer::new(
+            repository_name,
+            root,
+            Self::default_path(root),
+        )
+        .refresh()?;
         Self::search_code_at(&Self::default_path(root), query)
     }
 
-    pub fn find_symbol(root: &Path, query: &str) -> Result<Vec<SymbolResult>> {
-        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
+    pub fn find_symbol(
+        repository_name: &str,
+        root: &Path,
+        query: &str,
+    ) -> Result<Vec<SymbolResult>> {
+        crate::incremental::IncrementalIndexer::new(
+            repository_name,
+            root,
+            Self::default_path(root),
+        )
+        .refresh()?;
         Self::find_symbol_at(&Self::default_path(root), query)
     }
 
-    pub fn read_symbol(root: &Path, symbol_id: &str) -> Result<ReadSymbolResult> {
-        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
+    pub fn read_symbol(
+        repository_name: &str,
+        root: &Path,
+        symbol_id: &str,
+    ) -> Result<ReadSymbolResult> {
+        crate::incremental::IncrementalIndexer::new(
+            repository_name,
+            root,
+            Self::default_path(root),
+        )
+        .refresh()?;
         Self::read_symbol_at(&Self::default_path(root), symbol_id)
     }
 
-    pub fn find_references(root: &Path, query: &str) -> Result<Vec<RelationshipResult>> {
-        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
+    pub fn find_references(
+        repository_name: &str,
+        root: &Path,
+        query: &str,
+    ) -> Result<Vec<RelationshipResult>> {
+        crate::incremental::IncrementalIndexer::new(
+            repository_name,
+            root,
+            Self::default_path(root),
+        )
+        .refresh()?;
         Self::find_relationships_at(&Self::default_path(root), query, "reference", false)
     }
 
-    pub fn find_callers(root: &Path, query: &str) -> Result<Vec<RelationshipResult>> {
-        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
+    pub fn find_callers(
+        repository_name: &str,
+        root: &Path,
+        query: &str,
+    ) -> Result<Vec<RelationshipResult>> {
+        crate::incremental::IncrementalIndexer::new(
+            repository_name,
+            root,
+            Self::default_path(root),
+        )
+        .refresh()?;
         Self::find_relationships_at(&Self::default_path(root), query, "call", false)
     }
 
-    pub fn find_callees(root: &Path, query: &str) -> Result<Vec<RelationshipResult>> {
-        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
+    pub fn find_callees(
+        repository_name: &str,
+        root: &Path,
+        query: &str,
+    ) -> Result<Vec<RelationshipResult>> {
+        crate::incremental::IncrementalIndexer::new(
+            repository_name,
+            root,
+            Self::default_path(root),
+        )
+        .refresh()?;
         Self::find_relationships_at(&Self::default_path(root), query, "call", true)
     }
 
-    pub fn find_related_tests(root: &Path, query: &str) -> Result<Vec<RelationshipResult>> {
-        crate::incremental::IncrementalIndexer::new(root, Self::default_path(root)).refresh()?;
+    pub fn find_related_tests(
+        repository_name: &str,
+        root: &Path,
+        query: &str,
+    ) -> Result<Vec<RelationshipResult>> {
+        crate::incremental::IncrementalIndexer::new(
+            repository_name,
+            root,
+            Self::default_path(root),
+        )
+        .refresh()?;
         Self::find_relationships_at(&Self::default_path(root), query, "test", false)
     }
 
@@ -270,6 +352,14 @@ impl IndexStore {
                 .unwrap_or_default(),
             snapshot_stale: false,
         })
+    }
+
+    pub(crate) fn repository_name_at(database_path: &Path) -> Result<Option<String>> {
+        if !database_path.is_file() {
+            return Ok(None);
+        }
+        let connection = Connection::open(database_path).map_err(database_error)?;
+        metadata_value(&connection, "repository_name")
     }
 
     pub fn file_state_at(
@@ -458,7 +548,7 @@ impl IndexStore {
     }
 }
 
-fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
+fn populate(transaction: &Transaction<'_>, repository_name: &str, root: &Path) -> Result<()> {
     let scanner = SourceScanner::new(root);
     let files = scanner.scan()?;
     let total_files = files.len();
@@ -468,8 +558,8 @@ fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
 
     transaction
         .execute(
-            "INSERT INTO metadata(key, value) VALUES ('schema_version', ?1), ('indexer_version', 'phase-5-git')",
-            [SCHEMA_VERSION.to_string()],
+        "INSERT INTO metadata(key, value) VALUES ('schema_version', ?1), ('indexer_version', 'phase-5-git'), ('repository_name', ?2)",
+            params![SCHEMA_VERSION.to_string(), repository_name],
         )
         .map_err(database_error)?;
     let git = crate::git::inspect(root)?;
@@ -514,9 +604,12 @@ fn populate(transaction: &Transaction<'_>, root: &Path) -> Result<()> {
             .map_err(database_error)?;
         let file_id = transaction.last_insert_rowid();
         for (index, symbol) in analysis.symbols.iter().enumerate() {
-            let symbol_id = format!(
-                "{relative_path}:{}:{}:{index}",
-                symbol.name, symbol.range.start_byte
+            let symbol_id = symbol_id(
+                repository_name,
+                &relative_path,
+                symbol.name.as_str(),
+                symbol.range.start_byte,
+                index,
             );
             transaction
                 .execute(
@@ -1052,6 +1145,16 @@ fn is_test_path(path: &str) -> bool {
         || lower.contains(".test.")
         || lower.contains(".spec.")
         || lower.contains("_test.")
+}
+
+pub(crate) fn symbol_id(
+    repository_name: &str,
+    relative_path: &str,
+    name: &str,
+    start_byte: usize,
+    index: usize,
+) -> String {
+    format!("symbol:{repository_name}:{relative_path}:{name}:{start_byte}:{index}")
 }
 
 fn initialize_schema(connection: &Connection) -> Result<()> {

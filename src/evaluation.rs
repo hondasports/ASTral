@@ -39,7 +39,7 @@ pub struct EvaluationReport {
     pub results: Vec<EvaluationCaseResult>,
 }
 
-pub fn evaluate(root: &Path, dataset: &Path) -> Result<EvaluationReport> {
+pub fn evaluate(repository_name: &str, root: &Path, dataset: &Path) -> Result<EvaluationReport> {
     let source = fs::read_to_string(dataset).map_err(|source| AstralError::PathAccess {
         path: dataset.to_path_buf(),
         source,
@@ -51,7 +51,7 @@ pub fn evaluate(root: &Path, dataset: &Path) -> Result<EvaluationReport> {
     let mut results = Vec::with_capacity(cases.len());
     for case in cases {
         let k = case.k.max(1);
-        let search = IndexStore::search_code(root, &case.query)?;
+        let search = IndexStore::search_code(repository_name, root, &case.query)?;
         let mut seen_paths = HashSet::new();
         let top_paths: Vec<_> = search
             .iter()

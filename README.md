@@ -123,12 +123,13 @@ ASTral は次の三段構えでインデックスの鮮度を保ちます。
 ## 想定 CLI
 
 ```bash
-astral index .
-astral serve --project-root .
-astral status .
-astral refresh .
-astral rebuild .
-astral clean .
+astral register my-repo .
+astral unregister my-repo
+astral index my-repo
+astral status my-repo
+astral search-code my-repo "RepositoryRoot"
+astral find-symbol my-repo "RepositoryRoot"
+astral serve
 ```
 
 ## MCP 接続イメージ
@@ -136,7 +137,7 @@ astral clean .
 ```toml
 [mcp_servers.astral]
 command = "astral"
-args = ["serve", "--project-root", "."]
+args = ["serve"]
 ```
 
 stdio 接続では、Codex や Claude Code などの MCP クライアントが ASTral を必要な間だけ子プロセスとして起動します。常時起動は不要です。

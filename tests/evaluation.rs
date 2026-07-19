@@ -27,7 +27,7 @@ fn evaluates_expected_paths_and_recall() {
     .expect("dataset");
     std::env::set_var("ASTRAL_DATA_DIR", repository.path().join(".astral-data"));
 
-    let report = evaluate(repository.path(), &dataset).expect("evaluation succeeds");
+    let report = evaluate("test-repo", repository.path(), &dataset).expect("evaluation succeeds");
     assert_eq!(report.cases, 1);
     assert_eq!(report.mean_recall_at_k, 1.0);
     assert_eq!(report.results[0].top_paths, vec!["target.ts"]);
