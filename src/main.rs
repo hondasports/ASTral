@@ -43,6 +43,8 @@ enum Commands {
     Watch(RepositoryArgs),
     /// Run the read-only MCP server over stdio.
     Serve,
+    /// Run the graphical web UI server.
+    Web(astral::web::Args),
     /// Evaluate search quality against a JSON dataset.
     Evaluate(EvaluateArgs),
 }
@@ -149,6 +151,7 @@ async fn run() -> astral::Result<()> {
         }
         Commands::Watch(args) => watch(args),
         Commands::Serve => serve().await,
+        Commands::Web(args) => web(args).await,
         Commands::Evaluate(args) => evaluate(args),
     };
     match &result {
@@ -182,6 +185,7 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::FindRelatedTests(_) => "find-related-tests",
         Commands::Watch(_) => "watch",
         Commands::Serve => "serve",
+        Commands::Web(_) => "web",
         Commands::Evaluate(_) => "evaluate",
     }
 }
@@ -200,6 +204,7 @@ fn command_repository(command: &Commands) -> String {
         | Commands::FindCallees(args)
         | Commands::FindRelatedTests(args) => args.repository_name.clone(),
         Commands::Evaluate(args) => args.repository_name.clone(),
+        Commands::Web(args) => args.repository_name.clone(),
         Commands::Serve => "<registry>".to_owned(),
     }
 }
@@ -371,6 +376,10 @@ async fn serve() -> astral::Result<()> {
     astral::mcp::serve_stdio()
         .await
         .map_err(|message| astral::AstralError::Indexing { message })
+}
+
+async fn web(args: astral::web::Args) -> astral::Result<()> {
+    astral::web::serve(args).await
 }
 
 fn evaluate(args: EvaluateArgs) -> astral::Result<()> {

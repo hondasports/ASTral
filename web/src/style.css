@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  body {
+    @apply h-screen w-screen overflow-hidden;
+  }
+  #app {
+    @apply h-full w-full;
+  }
+  pre code.hljs {
+    @apply rounded-lg;
+  }
+}

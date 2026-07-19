@@ -11,6 +11,7 @@ pub mod oxc_analyzer;
 pub mod ranking;
 pub mod repository;
 pub mod scanner;
+pub mod web;
 
 pub use analyzer::{
     AnalysisResult, AnalyzerMetadata, Call, Diagnostic, DiagnosticSeverity, Export, Import,

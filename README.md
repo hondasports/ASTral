@@ -127,10 +127,13 @@ ASTral は次の三段構えでインデックスの鮮度を保ちます。
 ```bash
 git clone https://github.com/hondasports/ASTral.git
 cd ASTral
+cd web && npm install && npm run build && cd ..
 cargo build --release
 ```
 
 `target/release/astral` が生成されます。PATH を通すか、`cargo install --path .` でインストールできます。
+
+フロントエンドアセットは `web/dist` にビルドされ、`cargo build` のタイミングで Rust バイナリに埋め込まれます。開発中にフロントエンドを修正する場合は `cd web && npm run dev` で Vite dev server を起動し、API は `http://127.0.0.1:8080` をプロキシします。
 
 ### 2. リポジトリを登録
 
@@ -175,6 +178,18 @@ astral find-related-tests my-repo "transferOwnership"
 `astral serve` で stdio 接続の MCP サーバーを起動します。MCP クライアントが必要な間だけ子プロセスとして起動するため、常時起動は不要です。
 
 利用可能なツールは `search_code`、`find_symbol`、`read_symbol`、`find_references`、`find_callers`、`find_callees`、`find_related_tests`、`get_index_status` です。
+
+### 6. Web UI で検索する
+
+```bash
+astral web my-repo
+```
+
+ブラウザで `http://127.0.0.1:8080` を開くと、自然言語 / シンボル検索、コードプレビュー、シンボル関係のグラフィカルな可視化が使えます。ポートは `--port`、ホストは `--host` で変更できます。開発中は `cd web && npm run dev` で Vite dev server を起動し、`/api` を `http://127.0.0.1:8080` にプロキシします。
+
+```bash
+astral web my-repo --port 3000
+```
 
 設定例（Windsurf / Claude Code など）:
 
