@@ -325,8 +325,7 @@ fn build_graph(repository_name: &str, root: &Path, symbol: &str) -> crate::Resul
         true,
     );
 
-    type RelationshipSearch =
-        fn(&str, &Path, &str) -> crate::Result<Vec<RelationshipResult>>;
+    type RelationshipSearch = fn(&str, &Path, &str) -> crate::Result<Vec<RelationshipResult>>;
     let relationship_searches: [RelationshipSearch; 4] = [
         IndexStore::find_references,
         IndexStore::find_callers,
