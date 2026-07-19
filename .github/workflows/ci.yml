@@ -54,5 +54,6 @@ jobs:
           ASTRAL_DATA_DIR: ${{ runner.temp }}/astral-data
         run: |
           cargo run -- --help
-          cargo run -- status .
-          cargo run -- evaluate .
+          cargo run -- register ci-repo .
+          cargo run -- status ci-repo
+          cargo run -- evaluate ci-repo

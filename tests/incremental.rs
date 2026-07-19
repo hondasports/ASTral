@@ -18,8 +18,8 @@ fn refreshes_modified_renamed_and_deleted_files() {
     let renamed = repository.path().join("renamed.ts");
     fs::write(&source, "export function before() { return 1; }\n").expect("source");
     let database = repository.path().join("index.sqlite");
-    IndexStore::rebuild_at(repository.path(), &database).expect("initial index");
-    let indexer = IncrementalIndexer::new(repository.path(), &database);
+    IndexStore::rebuild_at("test-repo", repository.path(), &database).expect("initial index");
+    let indexer = IncrementalIndexer::new("test-repo", repository.path(), &database);
 
     fs::write(&source, "export function after() { return 2; }\n").expect("modified source");
     let report = indexer.refresh().expect("modify refresh");
@@ -56,8 +56,8 @@ fn keeps_last_good_data_out_of_search_while_a_file_is_stale() {
     let source = repository.path().join("app.ts");
     fs::write(&source, "export function stable() { return 1; }\n").expect("source");
     let database = repository.path().join("index.sqlite");
-    IndexStore::rebuild_at(repository.path(), &database).expect("initial index");
-    let indexer = IncrementalIndexer::new(repository.path(), &database);
+    IndexStore::rebuild_at("test-repo", repository.path(), &database).expect("initial index");
+    let indexer = IncrementalIndexer::new("test-repo", repository.path(), &database);
 
     fs::write(&source, "export function broken( {\n").expect("broken source");
     let report = indexer.refresh().expect("stale refresh");

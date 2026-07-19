@@ -1,13 +1,10 @@
-use std::{
-    path::{Path, PathBuf},
-    process::ExitCode,
-};
+use std::{path::PathBuf, process::ExitCode};
 
 use astral::{
     config::Config,
     incremental::IncrementalIndexer,
     index::{IndexStore, RelationshipResult},
-    logging, RepositoryRoot,
+    logging, RegisteredRepository, RepositoryRegistry,
 };
 use clap::{CommandFactory, Parser, Subcommand};
 
@@ -20,10 +17,14 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Register a repository name and root path.
+    Register(RegisterArgs),
+    /// Remove a repository registration and its stored index.
+    Unregister(RepositoryArgs),
     /// Resolve a repository root and report its index state.
-    Status(StatusArgs),
+    Status(RepositoryArgs),
     /// Build or replace the repository index.
-    Index(StatusArgs),
+    Index(RepositoryArgs),
     /// Search indexed source code with SQLite FTS5.
     SearchCode(SearchArgs),
     /// Find indexed symbols by name.
@@ -39,47 +40,58 @@ enum Commands {
     /// Find tests related to the target symbol.
     FindRelatedTests(RelationshipArgs),
     /// Watch the Working Tree and incrementally update the index.
-    Watch(StatusArgs),
+    Watch(RepositoryArgs),
     /// Run the read-only MCP server over stdio.
-    Serve(StatusArgs),
+    Serve,
     /// Evaluate search quality against a JSON dataset.
     Evaluate(EvaluateArgs),
 }
 
 #[derive(Debug, clap::Args)]
-struct StatusArgs {
-    /// A repository directory or a directory below its root.
+struct RegisterArgs {
+    /// Stable repository name used by CLI and MCP requests.
+    repository_name: String,
+    /// Repository root path.
     repository_root: PathBuf,
+    /// Replace an existing name-to-root mapping.
+    #[arg(long)]
+    replace: bool,
+}
+
+#[derive(Debug, clap::Args)]
+struct RepositoryArgs {
+    /// Registered repository name.
+    repository_name: String,
 }
 
 #[derive(Debug, clap::Args)]
 struct SearchArgs {
-    /// A repository directory or a directory below its root.
-    repository_root: PathBuf,
+    /// Registered repository name.
+    repository_name: String,
     /// Search query or symbol name.
     query: String,
 }
 
 #[derive(Debug, clap::Args)]
 struct ReadSymbolArgs {
-    /// A repository directory or a directory below its root.
-    repository_root: PathBuf,
+    /// Registered repository name.
+    repository_name: String,
     /// Stable symbol identifier returned by find-symbol.
     symbol_id: String,
 }
 
 #[derive(Debug, clap::Args)]
 struct RelationshipArgs {
-    /// A repository directory or a directory below its root.
-    repository_root: PathBuf,
+    /// Registered repository name.
+    repository_name: String,
     /// Symbol identifier, name, or qualified name.
     symbol: String,
 }
 
 #[derive(Debug, clap::Args)]
 struct EvaluateArgs {
-    /// A repository directory or a directory below its root.
-    repository_root: PathBuf,
+    /// Registered repository name.
+    repository_name: String,
     /// Evaluation dataset JSON path.
     dataset: Option<PathBuf>,
 }
@@ -115,13 +127,15 @@ async fn run() -> astral::Result<()> {
     logging::init(&config)?;
 
     let command_name = command_name(&command);
-    let repository = command_repository(&command).display().to_string();
+    let repository = command_repository(&command);
     tracing::info!(
         command = command_name,
         repository = %repository,
         "command started"
     );
     let result = match command {
+        Commands::Register(args) => register(args),
+        Commands::Unregister(args) => unregister(args),
         Commands::Status(args) => status(args),
         Commands::Index(args) => index(args),
         Commands::SearchCode(args) => search_code(args),
@@ -134,7 +148,7 @@ async fn run() -> astral::Result<()> {
             find_relationships(args, IndexStore::find_related_tests)
         }
         Commands::Watch(args) => watch(args),
-        Commands::Serve(args) => serve(args).await,
+        Commands::Serve => serve().await,
         Commands::Evaluate(args) => evaluate(args),
     };
     match &result {
@@ -155,6 +169,8 @@ async fn run() -> astral::Result<()> {
 
 fn command_name(command: &Commands) -> &'static str {
     match command {
+        Commands::Register(_) => "register",
+        Commands::Unregister(_) => "unregister",
         Commands::Status(_) => "status",
         Commands::Index(_) => "index",
         Commands::SearchCode(_) => "search-code",
@@ -165,24 +181,26 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::FindCallees(_) => "find-callees",
         Commands::FindRelatedTests(_) => "find-related-tests",
         Commands::Watch(_) => "watch",
-        Commands::Serve(_) => "serve",
+        Commands::Serve => "serve",
         Commands::Evaluate(_) => "evaluate",
     }
 }
 
-fn command_repository(command: &Commands) -> &Path {
+fn command_repository(command: &Commands) -> String {
     match command {
-        Commands::Status(args)
+        Commands::Register(args) => args.repository_name.clone(),
+        Commands::Unregister(args)
+        | Commands::Status(args)
         | Commands::Index(args)
-        | Commands::Watch(args)
-        | Commands::Serve(args) => &args.repository_root,
-        Commands::SearchCode(args) | Commands::FindSymbol(args) => &args.repository_root,
-        Commands::ReadSymbol(args) => &args.repository_root,
+        | Commands::Watch(args) => args.repository_name.clone(),
+        Commands::SearchCode(args) | Commands::FindSymbol(args) => args.repository_name.clone(),
+        Commands::ReadSymbol(args) => args.repository_name.clone(),
         Commands::FindReferences(args)
         | Commands::FindCallers(args)
         | Commands::FindCallees(args)
-        | Commands::FindRelatedTests(args) => &args.repository_root,
-        Commands::Evaluate(args) => &args.repository_root,
+        | Commands::FindRelatedTests(args) => args.repository_name.clone(),
+        Commands::Evaluate(args) => args.repository_name.clone(),
+        Commands::Serve => "<registry>".to_owned(),
     }
 }
 
@@ -191,6 +209,10 @@ fn error_kind(error: &astral::AstralError) -> &'static str {
         astral::AstralError::PathNotFound { .. } => "path_not_found",
         astral::AstralError::NotDirectory { .. } => "not_directory",
         astral::AstralError::RepositoryRootNotFound { .. } => "repository_root_not_found",
+        astral::AstralError::RepositoryNotRegistered { .. } => "repository_not_registered",
+        astral::AstralError::InvalidRepositoryName { .. } => "invalid_repository_name",
+        astral::AstralError::RepositoryNameConflict { .. } => "repository_name_conflict",
+        astral::AstralError::RepositoryRootConflict { .. } => "repository_root_conflict",
         astral::AstralError::PathAccess { .. } => "path_access",
         astral::AstralError::Canonicalize { .. } => "canonicalize",
         astral::AstralError::InvalidConfiguration { .. } => "invalid_configuration",
@@ -200,10 +222,46 @@ fn error_kind(error: &astral::AstralError) -> &'static str {
     }
 }
 
-fn status(args: StatusArgs) -> astral::Result<()> {
-    let root = RepositoryRoot::resolve(args.repository_root)?;
-    println!("Repository root: {}", root.path().display());
-    let status = IndexStore::get_index_status(root.path())?;
+fn register(args: RegisterArgs) -> astral::Result<()> {
+    let repository = RepositoryRegistry::new().register(
+        &args.repository_name,
+        args.repository_root,
+        args.replace,
+    )?;
+    println!(
+        "Registered repository '{}' at {}",
+        repository.name,
+        repository.root.path().display()
+    );
+    Ok(())
+}
+
+fn unregister(args: RepositoryArgs) -> astral::Result<()> {
+    let registry = RepositoryRegistry::new();
+    let root = registry.registered_root_path(&args.repository_name)?;
+    registry.unregister(&args.repository_name)?;
+    let removed_index = IndexStore::remove_for_root(&root)?;
+    println!(
+        "Unregistered repository '{}'{}",
+        args.repository_name,
+        if removed_index {
+            " and removed its index"
+        } else {
+            ""
+        }
+    );
+    Ok(())
+}
+
+fn resolve_repository(name: &str) -> astral::Result<RegisteredRepository> {
+    RepositoryRegistry::new().resolve(name)
+}
+
+fn status(args: RepositoryArgs) -> astral::Result<()> {
+    let repository = resolve_repository(&args.repository_name)?;
+    println!("Repository: {}", repository.name);
+    println!("Repository root: {}", repository.root.path().display());
+    let status = IndexStore::get_index_status(repository.root.path())?;
     if status.indexed {
         println!("Index status: indexed");
         println!("Indexed files: {}", status.file_count);
@@ -229,10 +287,10 @@ fn status(args: StatusArgs) -> astral::Result<()> {
     Ok(())
 }
 
-fn index(args: StatusArgs) -> astral::Result<()> {
-    let root = RepositoryRoot::resolve(args.repository_root)?;
-    let database = IndexStore::default_path(root.path());
-    let status = IndexStore::rebuild_at(root.path(), &database)?;
+fn index(args: RepositoryArgs) -> astral::Result<()> {
+    let repository = resolve_repository(&args.repository_name)?;
+    let database = IndexStore::default_path(repository.root.path());
+    let status = IndexStore::rebuild_at(&repository.name, repository.root.path(), &database)?;
     println!(
         "Index updated: {} files, {} symbols",
         status.file_count, status.symbol_count
@@ -241,8 +299,8 @@ fn index(args: StatusArgs) -> astral::Result<()> {
 }
 
 fn search_code(args: SearchArgs) -> astral::Result<()> {
-    let root = RepositoryRoot::resolve(args.repository_root)?;
-    for result in IndexStore::search_code(root.path(), &args.query)? {
+    let repository = resolve_repository(&args.repository_name)?;
+    for result in IndexStore::search_code(&repository.name, repository.root.path(), &args.query)? {
         println!(
             "{}:{}-{} score={:.3} matched_by={} reason={}\n{}",
             result.relative_path,
@@ -258,8 +316,8 @@ fn search_code(args: SearchArgs) -> astral::Result<()> {
 }
 
 fn find_symbol(args: SearchArgs) -> astral::Result<()> {
-    let root = RepositoryRoot::resolve(args.repository_root)?;
-    for result in IndexStore::find_symbol(root.path(), &args.query)? {
+    let repository = resolve_repository(&args.repository_name)?;
+    for result in IndexStore::find_symbol(&repository.name, repository.root.path(), &args.query)? {
         println!(
             "{} {} {} {}",
             result.symbol_id, result.kind, result.relative_path, result.name
@@ -269,8 +327,9 @@ fn find_symbol(args: SearchArgs) -> astral::Result<()> {
 }
 
 fn read_symbol(args: ReadSymbolArgs) -> astral::Result<()> {
-    let root = RepositoryRoot::resolve(args.repository_root)?;
-    let result = IndexStore::read_symbol(root.path(), &args.symbol_id)?;
+    let repository = resolve_repository(&args.repository_name)?;
+    let result =
+        IndexStore::read_symbol(&repository.name, repository.root.path(), &args.symbol_id)?;
     println!(
         "{} {}\n{}",
         result.relative_path, result.name, result.source
@@ -280,10 +339,10 @@ fn read_symbol(args: ReadSymbolArgs) -> astral::Result<()> {
 
 fn find_relationships(
     args: RelationshipArgs,
-    search: fn(&std::path::Path, &str) -> astral::Result<Vec<RelationshipResult>>,
+    search: fn(&str, &std::path::Path, &str) -> astral::Result<Vec<RelationshipResult>>,
 ) -> astral::Result<()> {
-    let root = RepositoryRoot::resolve(args.repository_root)?;
-    for result in search(root.path(), &args.symbol)? {
+    let repository = resolve_repository(&args.repository_name)?;
+    for result in search(&repository.name, repository.root.path(), &args.symbol)? {
         println!(
             "{} {:.1} {} {} -> {} {}",
             result.edge_type,
@@ -301,30 +360,25 @@ fn find_relationships(
     Ok(())
 }
 
-fn watch(args: StatusArgs) -> astral::Result<()> {
-    let root = RepositoryRoot::resolve(args.repository_root)?;
-    let database = IndexStore::default_path(root.path());
-    println!("Watching repository: {}", root.path().display());
-    IncrementalIndexer::new(root.path(), database).watch()
+fn watch(args: RepositoryArgs) -> astral::Result<()> {
+    let repository = resolve_repository(&args.repository_name)?;
+    let database = IndexStore::default_path(repository.root.path());
+    println!("Watching repository: {}", repository.name);
+    IncrementalIndexer::new(&repository.name, repository.root.path(), database).watch()
 }
 
-async fn serve(args: StatusArgs) -> astral::Result<()> {
-    let root = RepositoryRoot::resolve(args.repository_root)?;
-    std::env::set_current_dir(root.path()).map_err(|source| astral::AstralError::PathAccess {
-        path: root.path().to_path_buf(),
-        source,
-    })?;
+async fn serve() -> astral::Result<()> {
     astral::mcp::serve_stdio()
         .await
         .map_err(|message| astral::AstralError::Indexing { message })
 }
 
 fn evaluate(args: EvaluateArgs) -> astral::Result<()> {
-    let root = RepositoryRoot::resolve(args.repository_root)?;
+    let repository = resolve_repository(&args.repository_name)?;
     let dataset = args
         .dataset
-        .unwrap_or_else(|| astral::evaluation::default_dataset(root.path()));
-    let report = astral::evaluation::evaluate(root.path(), &dataset)?;
+        .unwrap_or_else(|| astral::evaluation::default_dataset(repository.root.path()));
+    let report = astral::evaluation::evaluate(&repository.name, repository.root.path(), &dataset)?;
     println!(
         "{}",
         serde_json::to_string_pretty(&report).map_err(|error| {

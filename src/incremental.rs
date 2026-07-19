@@ -13,7 +13,7 @@ use crate::{
     error::{AstralError, Result},
     index::{
         database_error, file_state_name, hash_bytes, now_string, public_api_hash, rebuild_edges,
-        symbol_kind_name, IndexStore, SCHEMA_VERSION,
+        symbol_id, symbol_kind_name, IndexStore, SCHEMA_VERSION,
     },
     oxc_analyzer::OxcAnalyzer,
     scanner::{SourceFile, SourceScanner},
@@ -40,6 +40,7 @@ struct FileUpdate {
 
 #[derive(Debug, Clone)]
 pub struct IncrementalIndexer {
+    repository_name: String,
     root: PathBuf,
     database_path: PathBuf,
     debounce: Duration,
@@ -47,8 +48,13 @@ pub struct IncrementalIndexer {
 }
 
 impl IncrementalIndexer {
-    pub fn new(root: impl Into<PathBuf>, database_path: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        repository_name: impl Into<String>,
+        root: impl Into<PathBuf>,
+        database_path: impl Into<PathBuf>,
+    ) -> Self {
         Self {
+            repository_name: repository_name.into(),
             root: root.into(),
             database_path: database_path.into(),
             debounce: DEFAULT_DEBOUNCE,
@@ -64,8 +70,12 @@ impl IncrementalIndexer {
 
     pub fn refresh(&self) -> Result<RefreshReport> {
         let status = IndexStore::status_at(&self.database_path)?;
-        if !status.indexed || status.schema_version != SCHEMA_VERSION {
-            IndexStore::rebuild_at(&self.root, &self.database_path)?;
+        let indexed_repository_name = IndexStore::repository_name_at(&self.database_path)?;
+        if !status.indexed
+            || status.schema_version != SCHEMA_VERSION
+            || indexed_repository_name.as_deref() != Some(&self.repository_name)
+        {
+            IndexStore::rebuild_at(&self.repository_name, &self.root, &self.database_path)?;
             return Ok(RefreshReport {
                 rebuilt: true,
                 ..RefreshReport::default()
@@ -73,7 +83,7 @@ impl IncrementalIndexer {
         }
         let git = crate::git::inspect(&self.root)?;
         if git.available && git_head_changed(&self.database_path, &git)? {
-            IndexStore::rebuild_at(&self.root, &self.database_path)?;
+            IndexStore::rebuild_at(&self.repository_name, &self.root, &self.database_path)?;
             return Ok(RefreshReport {
                 rebuilt: true,
                 ..RefreshReport::default()
@@ -97,7 +107,8 @@ impl IncrementalIndexer {
                 .map(|state| state.status)
                 .unwrap_or(FileStateStatus::Stale);
             if indexed.get(path) != Some(&hash) || state != FileStateStatus::Fresh {
-                let update = update_file(&self.database_path, file, &analyzer)?;
+                let update =
+                    update_file(&self.repository_name, &self.database_path, file, &analyzer)?;
                 updated_paths.insert(path.clone());
                 if update.indexed {
                     report.updated_files += 1;
@@ -128,7 +139,8 @@ impl IncrementalIndexer {
                 continue;
             }
             if let Some(file) = current.get(&path) {
-                let update = update_file(&self.database_path, file, &analyzer)?;
+                let update =
+                    update_file(&self.repository_name, &self.database_path, file, &analyzer)?;
                 if update.indexed {
                     report.updated_files += 1;
                 } else {
@@ -312,6 +324,7 @@ fn importer_paths(database_path: &Path, target_path: &str) -> Result<Vec<String>
 }
 
 fn update_file(
+    repository_name: &str,
     database_path: &Path,
     file: &SourceFile,
     analyzer: &OxcAnalyzer,
@@ -343,7 +356,7 @@ fn update_file(
         return Ok(FileUpdate::default());
     }
     delete_file_records(&transaction, &path)?;
-    insert_analysis(&transaction, file, &analysis, &path, &hash)?;
+    insert_analysis(&transaction, repository_name, file, &analysis, &path, &hash)?;
     upsert_state(
         &transaction,
         &path,
@@ -436,6 +449,7 @@ fn upsert_state(
 
 fn insert_analysis(
     transaction: &Transaction<'_>,
+    repository_name: &str,
     file: &SourceFile,
     analysis: &AnalysisResult,
     relative_path: &str,
@@ -449,9 +463,12 @@ fn insert_analysis(
         .map_err(database_error)?;
     let file_id = transaction.last_insert_rowid();
     for (index, symbol) in analysis.symbols.iter().enumerate() {
-        let symbol_id = format!(
-            "{relative_path}:{}:{}:{index}",
-            symbol.name, symbol.range.start_byte
+        let symbol_id = symbol_id(
+            repository_name,
+            relative_path,
+            &symbol.name,
+            symbol.range.start_byte,
+            index,
         );
         transaction
             .execute(

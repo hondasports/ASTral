@@ -17,4 +17,4 @@ pub use analyzer::{
     LanguageAnalyzer, Reference, ReferenceKind, SourceRange, Symbol, SymbolKind,
 };
 pub use error::{AstralError, Result};
-pub use repository::RepositoryRoot;
+pub use repository::{RegisteredRepository, RepositoryRegistry, RepositoryRoot};

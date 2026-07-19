@@ -13,6 +13,18 @@ pub enum AstralError {
     #[error("repository root not found from path: {path}")]
     RepositoryRootNotFound { path: PathBuf },
 
+    #[error("repository not registered: {name}")]
+    RepositoryNotRegistered { name: String },
+
+    #[error("invalid repository name: {name}")]
+    InvalidRepositoryName { name: String },
+
+    #[error("repository name already maps to a different root: {name}")]
+    RepositoryNameConflict { name: String },
+
+    #[error("repository root is already registered under another name: {path}")]
+    RepositoryRootConflict { path: PathBuf },
+
     #[error("failed to access path '{path}': {source}")]
     PathAccess {
         path: PathBuf,

@@ -24,27 +24,30 @@ fn finds_references_callers_callees_and_related_tests() {
     )
     .expect("test source");
     let database = repository.path().join("index.sqlite");
-    IndexStore::rebuild_at(repository.path(), &database).expect("initial index");
+    IndexStore::rebuild_at("test-repo", repository.path(), &database).expect("initial index");
     std::env::set_var("ASTRAL_DATA_DIR", repository.path().join(".astral-data"));
 
-    let callers = IndexStore::find_callers(repository.path(), "create").expect("callers");
+    let callers =
+        IndexStore::find_callers("test-repo", repository.path(), "create").expect("callers");
     assert!(callers
         .iter()
         .any(|result| result.source_file == "tests/app.test.ts"));
     assert!(callers.iter().all(|result| result.confidence > 0.0));
 
-    let callees = IndexStore::find_callees(repository.path(), "create").expect("callees");
+    let callees =
+        IndexStore::find_callees("test-repo", repository.path(), "create").expect("callees");
     assert!(callees
         .iter()
         .any(|result| result.target_name.as_deref() == Some("helper")));
 
-    let references = IndexStore::find_references(repository.path(), "value").expect("references");
+    let references =
+        IndexStore::find_references("test-repo", repository.path(), "value").expect("references");
     assert!(references
         .iter()
         .any(|result| result.source_file == "app.ts"));
 
-    let related_tests =
-        IndexStore::find_related_tests(repository.path(), "create").expect("related tests");
+    let related_tests = IndexStore::find_related_tests("test-repo", repository.path(), "create")
+        .expect("related tests");
     assert!(related_tests
         .iter()
         .any(|result| result.source_file == "tests/app.test.ts"));
